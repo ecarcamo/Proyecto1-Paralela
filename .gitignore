@@ -1,0 +1,19 @@
+# Binarios y objetos
+bin/
+build/
+*.o
+*.d
+*.exe
+*.out
+
+# Datos de medicion generados (los resultados curados si se versionan)
+datos/*.raw
+datos/tmp_*
+
+# Editores / SO
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
