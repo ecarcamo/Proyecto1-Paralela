@@ -1,7 +1,12 @@
 # Para que el LSP del editor encuentre los headers de include/ sin tener que
 # generar compile_commands.json. Sin esto, clangd marca "config.h not found"
 # en todos los .c aunque el proyecto compile perfecto con make.
+#
+# El -xc es necesario porque clangd asume Objective-C++ para los .h sueltos,
+# y ahi -std=c11 es invalido. Forzando el lenguaje a C, los headers se
+# analizan igual que los .c que los incluyen.
 CompileFlags:
   Add:
-    - "-Iinclude"
+    - "-xc"
     - "-std=c11"
+    - "-Iinclude"
