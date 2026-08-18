@@ -1,0 +1,7 @@
+# Para que el LSP del editor encuentre los headers de include/ sin tener que
+# generar compile_commands.json. Sin esto, clangd marca "config.h not found"
+# en todos los .c aunque el proyecto compile perfecto con make.
+CompileFlags:
+  Add:
+    - "-Iinclude"
+    - "-std=c11"
