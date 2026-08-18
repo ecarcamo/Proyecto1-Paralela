@@ -13,8 +13,11 @@
  *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
  * =========================================================================== */
 /* clock_gettime es POSIX, no C11: sin este macro, -std=c11 estricto no la
- * declara y el compilador la asume implicita. Va ANTES de cualquier include. */
-#define _POSIX_C_SOURCE 199309L
+ * declara y el compilador la asume implicita. Va ANTES de cualquier include.
+ * Se usa 200809L (POSIX.1-2008) y no 199309L: en macOS la libc oculta snprintf
+ * por debajo de ese nivel de feature-test, y 200809L sigue proveyendo
+ * clock_gettime/CLOCK_MONOTONIC. */
+#define _POSIX_C_SOURCE 200809L
 
 #include "sphere.h"
 #include "metrics.h"
