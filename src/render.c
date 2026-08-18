@@ -1,13 +1,19 @@
 /* ===========================================================================
- *  render.c - Framebuffer, camara y el dibujo de puntos (baseline, sin Voronoi).
+ *  render.c - Framebuffer, camara y el raycasting con Voronoi esferico.
  *
- *  Este cuerpo existe para que la esfera se PUEDA VER hoy: proyecta cada
- *  semilla a pantalla y pinta un disco sombreado con z-buffer. Es O(N), rapido,
- *  y suficiente para comprobar que la geometria y el giro estan bien.
+ *  Esta version reemplaza el dibujo de puntos por el kernel real del
+ *  proyecto: por cada pixel se lanza un rayo, se intersecta contra la esfera
+ *  unitaria y se busca a que semilla le toca esa celda del Voronoi esferico.
+ *  Es O(P*N) -- P pixeles de la silueta por N semillas -- y es exactamente el
+ *  cuello de botella que se va a paralelizar despues.
  *
- *  Deliberadamente NO lleva ningun '#pragma omp': estamos construyendo el
- *  baseline secuencial honesto contra el que se va a medir el speedup. La
- *  paralelizacion entra despues, sobre el raycasting con Voronoi de Dieguito.
+ *  Deliberadamente NO lleva ningun '#pragma omp', NO usa acos() en el bucle
+ *  caliente y NO usa rejilla espacial: este es el baseline secuencial
+ *  honesto contra el que se mide el speedup (docs/PLAN-03-DIEGUITO.md).
+ *
+ *  El render de puntos original (discos con z-buffer) se conserva como
+ *  render_points(): sigue siendo el plan B si --voronoi 0 o si algun equipo
+ *  necesita un fallback mas barato.
  *
  *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
  * =========================================================================== */
@@ -21,6 +27,12 @@
 /* Fondo casi negro con un toque frio: hace resaltar los colores vivos de las
  * semillas sin ser un negro plano que se ve barato. */
 #define RENDER_BG  0xFF0A0A12u
+
+/* Ancho de la banda de antialiasing entre celdas de Voronoi, en unidades de
+ * producto punto. Chico a proposito: sobre la esfera unitaria best1-best2 se
+ * mueve poco incluso lejos del borde, asi que una banda angosta ya alcanza
+ * para suavizar sin comerse celdas enteras cuando N es grande. */
+#define EDGE_W  0.02f
 
 /* ==========================================================================
  *  Framebuffer
@@ -100,7 +112,9 @@ Vec3 camera_ray(const Camera *cam, int i, int j, int w, int h)
 }
 
 /* ==========================================================================
- *  Dibujo de un disco sombreado con z-buffer.
+ *  render_points - el dibujo de discos con z-buffer (baseline de Nico).
+ *  Se conserva completo para --voronoi 0: mas barato, sirve de plan B si el
+ *  raycasting se cae de FPS en alguna maquina.
  * ========================================================================== */
 static void draw_disc(Framebuffer *fb, float *zbuf,
                       int cx, int cy, int radius, float depth, uint32_t color)
@@ -129,14 +143,8 @@ static void draw_disc(Framebuffer *fb, float *zbuf,
     }
 }
 
-/* ==========================================================================
- *  render_frame - LA FIRMA ES UN CONTRATO (ver render.h). Dieguito reemplaza
- *  SOLO este cuerpo por el raycasting con Voronoi.
- * ========================================================================== */
-void render_frame(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
+static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
 {
-    if (fb == NULL || fb->px == NULL || s == NULL) return;
-
     const int w = fb->w, h = fb->h;
     fb_clear(fb, RENDER_BG);
 
@@ -200,4 +208,119 @@ void render_frame(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t
     }
 
     free(zbuf);
+}
+
+/* ==========================================================================
+ *  rotate_seeds - rota las N semillas UNA vez por frame a un buffer aparte.
+ *
+ *  Con N << W*H (el caso normal, N por defecto es 128) sale mucho mas barato
+ *  rotar las N semillas una sola vez que rotar el rayo de cada uno de los
+ *  W*H pixeles (docs/01-FUNDAMENTO-MATEMATICO.md, seccion 3.1).
+ *
+ *  Importante: este buffer es SOLO para el render de este frame. No toca
+ *  s->ax/ay/az, que son el estado persistente de la fisica (physics.c) --
+ *  pisarlos aca romperia la integracion de Verlet entre frames.
+ * ========================================================================== */
+static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float ctx,
+                         float *rx, float *ry, float *rz)
+{
+    for (int i = 0; i < s->n; ++i) {
+        Vec3 p = seed_pos(s, i);
+        p = v3_rot_y(p, sy, cyv);
+        p = v3_rot_x(p, stx, ctx);
+        rx[i] = p.x;
+        ry[i] = p.y;
+        rz[i] = p.z;
+    }
+}
+
+/* ==========================================================================
+ *  render_raycast - el kernel dominante: raycasting por pixel con Voronoi
+ *  esferico. Ver docs/01-FUNDAMENTO-MATEMATICO.md seccion 4.
+ * ========================================================================== */
+static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
+{
+    const int w = fb->w, h = fb->h;
+
+    /* Buffer de semillas rotadas para este frame. Un malloc por frame, igual
+     * que el z-buffer de render_points: es codigo secuencial deliberadamente
+     * simple, la version paralela decide si vale la pena reciclarlo. */
+    float *rx = (float *)malloc((size_t)s->n * sizeof(float));
+    float *ry = (float *)malloc((size_t)s->n * sizeof(float));
+    float *rz = (float *)malloc((size_t)s->n * sizeof(float));
+    if (rx == NULL || ry == NULL || rz == NULL) {
+        free(rx); free(ry); free(rz);
+        return;                                        /* sin memoria, no crash */
+    }
+
+    const float ang  = (float)(t * ((cfg != NULL) ? cfg->rot_speed : SS_DEF_ROT_SPEED));
+    const float sy   = sinf(ang),  cyv = cosf(ang);
+    const float tilt = 0.42f;                 /* mismo encuadre que render_points */
+    const float stx  = sinf(tilt), ctx = cosf(tilt);
+    rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz);
+
+    Camera cam = camera_make(cfg);
+    const Vec3 center = v3(0.0f, 0.0f, 0.0f);
+    const float radius = 1.0f;                          /* esfera unitaria */
+
+    /* Misma luz fija en el mundo que usaba render_points, para que el look
+     * no cambie al alternar --voronoi. */
+    const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));
+
+    for (int j = 0; j < h; ++j) {
+        for (int i = 0; i < w; ++i) {
+            Vec3 d = camera_ray(&cam, i, j, w, h);
+
+            float thit;
+            if (!ray_sphere_hit(cam.origin, d, center, radius, &thit)) {
+                fb->px[j * w + i] = RENDER_BG;
+                continue;                               /* rayo de fondo, ~10 ciclos */
+            }
+
+            /* Punto de impacto y su normal. Sobre la esfera unitaria
+             * centrada en el origen, la normal ES el punto -- no hace falta
+             * normalizar de nuevo. */
+            Vec3 q   = v3_madd(cam.origin, d, thit);
+            Vec3 nrm = q;
+
+            /* --- Voronoi esferico: el bucle interno, O(N) ------------------
+             * Se maximiza el producto punto en vez de minimizar la distancia
+             * geodesica (que pediria acos): son equivalentes porque acos es
+             * monotona decreciente, y evitamos un acos por semilla por pixel. */
+            float best1 = -2.0f, best2 = -2.0f;
+            int   winner = 0;
+            for (int k = 0; k < s->n; ++k) {
+                float dot = nrm.x * rx[k] + nrm.y * ry[k] + nrm.z * rz[k];
+                if      (dot > best1) { best2 = best1; best1 = dot; winner = k; }
+                else if (dot > best2) { best2 = dot; }
+            }
+
+            /* Sombreado: Lambert difuso + piso ambiente, mismas constantes
+             * que render_points para que el brillo no cambie entre modos. */
+            float lambert = v3_dot(nrm, light);
+            if (lambert < 0.0f) lambert = 0.0f;
+            float k_shade = 0.28f + 0.72f * lambert;
+            uint32_t base = rgb_mul(s->color[winner], k_shade);
+
+            /* Borde de celda: best1-best2 es chico exactamente en la
+             * frontera entre dos celdas, asi que un smoothstep sobre esa
+             * diferencia da antialiasing analitico sin detectar aristas. */
+            float edge = f_smoothstep(0.0f, EDGE_W, best1 - best2);
+            fb->px[j * w + i] = rgb_lerp(RENDER_BG, base, edge);
+        }
+    }
+
+    free(rx); free(ry); free(rz);
+}
+
+/* ==========================================================================
+ *  render_frame - despacha entre Voronoi (por defecto) y puntos (--voronoi 0).
+ *  La firma es el contrato con main.c y no cambia (ver render.h).
+ * ========================================================================== */
+void render_frame(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
+{
+    if (fb == NULL || fb->px == NULL || s == NULL) return;
+
+    if (cfg != NULL && cfg->voronoi) render_raycast(fb, s, cfg, t);
+    else                             render_points(fb, s, cfg, t);
 }

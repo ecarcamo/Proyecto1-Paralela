@@ -56,6 +56,17 @@
 #define SS_DEF_FILL         0.84     /* fraccion de la altura que ocupa la esfera */
 #define SS_DEF_BENCH_WARMUP 10       /* frames descartados por calentamiento  */
 
+/* --------------------------------------------------------------------------
+ *  Fisica: repulsion de Coulomb con softening + Velocity-Verlet.
+ *  Ver docs/01-FUNDAMENTO-MATEMATICO.md seccion 5. No son argumentos de CLI
+ *  (el enunciado no lo pide para esto): se calibraron a ojo para que el
+ *  sistema converja en pocos segundos sin oscilar para siempre.
+ * -------------------------------------------------------------------------- */
+#define SS_DEF_PHYS_K        1.0f    /* constante de Coulomb                  */
+#define SS_DEF_PHYS_EPSILON  0.05f   /* softening: evita la singularidad en r=0 */
+#define SS_DEF_PHYS_GAMMA    0.5f    /* friccion viscosa, sin ella no converge */
+#define SS_DEF_PHYS_MASS     1.0f    /* masa de cada semilla                  */
+
 /* ==========================================================================
  *  Config - una sola estructura para todo el programa.
  * ========================================================================== */

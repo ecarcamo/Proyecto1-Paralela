@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wsl -- bash -lc \"which gcc make sdl2-config pkg-config 2>&1; echo ---; gcc --version 2>&1 | head -1\")"
+    ]
+  }
+}
