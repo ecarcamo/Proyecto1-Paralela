@@ -92,8 +92,8 @@ OMP_BIN := $(BIN_DIR)/screensaver_omp
 # ------------------------------------------------------------------- targets
 .PHONY: all seq omp tests test clean distclean print-config help
 
-## all: compila los dos binarios y los tests (por defecto)
-all: seq omp tests
+## all: binario secuencial y tests (por defecto)
+all: seq tests
 
 ## seq: binario secuencial, sin OpenMP  <- el baseline honesto que se mide
 seq: $(SEQ_BIN)

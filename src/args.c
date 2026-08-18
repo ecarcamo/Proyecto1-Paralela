@@ -154,8 +154,7 @@ void args_usage(const char *prog)
 "  --physics 0|1    repulsion Douady-Couder          (def 1)\n"
 "  --voronoi 0|1    celdas (1) o solo puntos (0)      (def 1)\n"
 "\n"
-"Paralelismo y medicion:\n"
-"  --threads T      hilos OpenMP, 0 = maximo          (def 0)\n"
+"Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"
 "  --no-render      corre sin abrir ventana (headless)\n"
 "  --csv            salida de mediciones en CSV\n"
@@ -222,17 +221,6 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
             cfg->bench_frames = (int)v;
         }
-        else if (strcmp(a, "--threads") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            long v;
-            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
-            if (v < 0) {
-                fprintf(stderr, "error: --threads no puede ser negativo (0 = maximo)\n");
-                goto bad;
-            }
-            cfg->threads = (int)v;
-        }
-
         /* --- reales ------------------------------------------------------ */
         else if (strcmp(a, "--angle") == 0) {
             /* El usuario piensa en grados (137.5); adentro todo va en radianes. */

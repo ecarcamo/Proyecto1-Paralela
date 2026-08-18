@@ -29,8 +29,6 @@ Config config_defaults(void)
     cfg.physics      = 1;
     cfg.voronoi      = 1;
 
-    cfg.threads      = 0;               /* 0 = usar el maximo del sistema */
-
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
     cfg.csv          = 0;
@@ -89,14 +87,6 @@ int config_validate(const Config *cfg)
     }
 
     /* --- Advertencias: no abortan, es decision del usuario ------------- */
-    if (cfg->n > SS_N_WARN) {
-        fprintf(stderr,
-                "aviso: con N = %d la version secuencial va a correr muy por\n"
-                "       debajo de %.0f FPS. Es intencional si estas midiendo el\n"
-                "       punto de saturacion; usa el binario _omp si no.\n",
-                cfg->n, SS_FPS_TARGET);
-    }
-
     if (cfg->bench_frames > 0 && cfg->vsync) {
         fprintf(stderr,
                 "aviso: --bench con vsync activo mide el tope del monitor, no\n"
@@ -127,8 +117,6 @@ void config_print(const Config *cfg)
     printf("  semilla PRNG      : %llu\n",       (unsigned long long)cfg->seed);
     printf("  fisica            : %s\n",         cfg->physics ? "si" : "no");
     printf("  voronoi           : %s\n",         cfg->voronoi ? "celdas" : "puntos");
-    if (cfg->threads > 0) printf("  hilos             : %d\n", cfg->threads);
-    else                  printf("  hilos             : maximo del sistema\n");
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);

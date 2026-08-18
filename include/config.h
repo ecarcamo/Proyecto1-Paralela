@@ -77,9 +77,6 @@ typedef struct {
     int      physics;       /* --physics  0|1  repulsion Douady-Couder       */
     int      voronoi;       /* --voronoi  0|1  celdas (1) o puntos (0)       */
 
-    /* --- paralelismo -------------------------------------------------- */
-    int      threads;       /* --threads  hilos OpenMP (0 = maximo)          */
-
     /* --- modo medicion ------------------------------------------------ */
     int      bench_frames;  /* --bench K  0 = modo ventana normal            */
     int      headless;      /* --no-render  1 = sin ventana                  */

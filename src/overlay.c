@@ -148,12 +148,7 @@ void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible
     overlay_text(fb, x, y, buf, fps_col, scale);
     y += line_h;
 
-    /* --- Linea 2: N y numero de hilos (la prueba de que seq y omp corren el
-     *     mismo N en la presentacion). --------------------------------------- */
-    if (cfg->threads > 0)
-        snprintf(buf, sizeof buf, "N=%d  HILOS=%d", cfg->n, cfg->threads);
-    else
-        snprintf(buf, sizeof buf, "N=%d  HILOS=MAX", cfg->n);
+    snprintf(buf, sizeof buf, "N=%d", cfg->n);
     overlay_text(fb, x, y, buf, DIM, scale);
     y += line_h;
 
