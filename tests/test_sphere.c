@@ -230,7 +230,10 @@ static void estimar_n_critico(SeedSet *s)
     printf("    costo por semilla       : %.4f ms/frame\n", b * 1000.0);
     printf("    >> N critico secuencial : %.0f semillas para %.0f FPS\n",
            n_crit, SS_FPS_TARGET);
-    printf("    (docs/02-PARAMETRO-N.md predice ~330; ver seccion 3)\n");
+    printf("    (referencia medida en el equipo: ~130 @1280x720, ver doc 2 sec 3)\n");
+    printf("    Ojo: este numero varia ~10%% entre corridas por turbo y por que\n");
+    printf("    otros procesos comparten la cache. Por eso el enunciado pide 10\n");
+    printf("    mediciones por punto: una sola corrida NO es un dato.\n");
     printf("  ------------------------------------------------------------\n");
 }
 

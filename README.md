@@ -59,13 +59,19 @@ que adivinar.
 ## Uso
 
 ```bash
-./bin/screensaver_seq --n 300
-./bin/screensaver_omp --n 3000 --threads 8
+./bin/screensaver_seq --n 128          # ~30 FPS: el filo del secuencial
+./bin/screensaver_seq --n 3000         # ~1.4 FPS: se traba a proposito
+./bin/screensaver_omp --n 3000         # ~41 FPS: mismo N, fluido otra vez
 ```
+
+> El valor por defecto de `--n` es **128** porque es el N crítico medido a 1280×720:
+> con ese valor el binario **secuencial** corre justo en los 30 FPS que exige el
+> enunciado. Subirlo es lo que traba el programa, y eso es exactamente la demostración
+> del proyecto — ver [docs/02-PARAMETRO-N.md](docs/02-PARAMETRO-N.md).
 
 | Opción | Descripción | Por defecto |
 |---|---|---|
-| `--n <int>` | **Semillas sobre la esfera** (el parámetro N del enunciado) | 1000 |
+| `--n <int>` | **Semillas sobre la esfera** (el parámetro N del enunciado) | 128 |
 | `--width <int>` | Ancho del canvas (mínimo 640) | 1280 |
 | `--height <int>` | Alto del canvas (mínimo 480) | 720 |
 | `--angle <grados>` | Ángulo de divergencia | 137.50776 |

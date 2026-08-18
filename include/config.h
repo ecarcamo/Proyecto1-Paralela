@@ -43,7 +43,12 @@
 /* --------------------------------------------------------------------------
  *  Valores por defecto. Todos sobreescribibles por linea de comandos.
  * -------------------------------------------------------------------------- */
-#define SS_DEF_N            1000
+/* El default es el N critico MEDIDO a 1280x720 (ver docs/02-PARAMETRO-N.md
+ * seccion 3): con este valor el binario SECUENCIAL corre justo en ~30 FPS,
+ * que es el piso que exige el enunciado. Arrancar por defecto en 1000 dejaria
+ * al secuencial en 4 FPS y pareceria que el programa esta roto.
+ * Subir N a proposito por encima de esto es la demo del proyecto. */
+#define SS_DEF_N            128
 #define SS_DEF_WIDTH        1280
 #define SS_DEF_HEIGHT       720
 #define SS_DEF_SEED         12345ULL

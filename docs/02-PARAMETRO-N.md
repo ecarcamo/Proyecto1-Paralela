@@ -44,9 +44,9 @@ Sea:
 | Símbolo | Significado | Valor por defecto |
 |---|---|---|
 | `W × H` | Resolución del canvas | 1280 × 720 = 921,600 px |
-| `P` | Píxeles **dentro de la silueta** de la esfera | ≈ 287,000 (31 % de la pantalla) |
+| `P` | Píxeles **dentro de la silueta** de la esfera | **287,285** (31.2 % de la pantalla) |
 | `N` | Semillas | parámetro |
-| `T_d` | Evaluaciones de producto punto por segundo, 1 hilo | ≈ 3 × 10⁹ /s *(a medir)* |
+| `T_d` | Evaluaciones de producto punto por segundo, 1 hilo | **1.175 × 10⁹ /s** ✅ *medido* |
 | `T_p` | Evaluaciones de par de repulsión por segundo, 1 hilo | ≈ 1 × 10⁹ /s *(a medir)* |
 | `a` | Costo fijo del frame (present + textura + overlay + fondo) | ≈ 1.5 ms *(a medir)* |
 
@@ -64,8 +64,8 @@ El tiempo de un frame se descompone en tres términos:
 Es decir, **`T(N) = a + b·N + c·N²`**, con:
 
 ```
-    b = P / T_d  ≈  287,000 / 3×10⁹  =  9.6 × 10⁻⁵ s   =  0.096 ms por semilla
-    c = 1  / T_p ≈  1 / 1×10⁹        =  1.0 × 10⁻⁹ s   =  1 ns por par
+    b = P / T_d  =  287,285 / 1.175×10⁹  =  2.445 × 10⁻⁴ s  =  0.2445 ms por semilla   ✅ medido
+    c = 1  / T_p ≈  1 / 1×10⁹            =  1.0   × 10⁻⁹ s  =  1 ns por par           (aún estimado)
 ```
 
 ### 2.1 ¿Cuál de los dos kernels manda? — un resultado no obvio
@@ -73,15 +73,15 @@ Es decir, **`T(N) = a + b·N + c·N²`**, con:
 El término cuadrático solo domina cuando `c·N² > b·N`, o sea:
 
 ```
-    N  >  b/c  =  (P/T_d)·T_p  =  287,000 / 3  ≈  96,000
+    N  >  b/c  =  (P/T_d)·T_p  =  2.445×10⁻⁴ / 1×10⁻⁹  ≈  244,500
 ```
 
-> **Para todo N por debajo de ~10⁵, el cuello de botella es el RENDER, no la física.**
+> **Para todo N por debajo de ~2.4 × 10⁵, el cuello de botella es el RENDER, no la física.**
 
 Esto es contraintuitivo — uno esperaría que un `O(N²)` aplaste a un `O(N)` — y la razón
-es que la constante del render (`P ≈ 287,000` píxeles) es **enorme** comparada con la de
-la física. Un `O(N)` con constante 287,000 le gana a un `O(N²)` con constante 1 hasta
-que `N` llega a 96,000.
+es que la constante del render (`P = 287,285` píxeles) es **enorme** comparada con la de
+la física. Un `O(N)` con constante 287,285 le gana a un `O(N²)` con constante 1 hasta
+que `N` llega a ~244,500 — que está muy por encima de cualquier `N` que vayamos a usar.
 
 **Consecuencia práctica para el proyecto:** todo el esfuerzo de optimización y
 paralelización va al bucle de Voronoi por píxel. La física se paraleliza igual (es
@@ -92,7 +92,7 @@ Es un hallazgo medible, defendible y de los que casi nadie reporta. Va al inform
 
 ---
 
-## 3. Predicción del N crítico secuencial
+## 3. El N crítico — modelo calibrado con mediciones reales
 
 El umbral que fija el enunciado es **30 FPS**, o sea `T ≤ 33.3 ms`.
 
@@ -100,21 +100,50 @@ Ignorando el término cuadrático (§2.1) y despejando:
 
 ```
     N_crit^seq  =  ( 1/F_obj  −  a ) / b
-                =  ( 33.3 ms  −  1.5 ms ) / 0.096 ms
-                ≈  331 semillas
+                =  ( 33.3 ms  −  1.5 ms ) / 0.2445 ms
+                ≈  130 semillas
 ```
 
-### 3.1 Proyección secuencial (estimada — se reemplaza con mediciones reales)
+> ### 📌 El modelo estaba mal por 2.5× y la medición lo corrigió
+>
+> La primera versión de este documento estimaba `T_d ≈ 3×10⁹` productos punto por
+> segundo y predecía `N_crit ≈ 330`. Al medirlo con `make test`, el valor real en la
+> máquina de Esteban resultó ser **`1.175×10⁹` — 2.5 veces menor** — y el `N_crit` real
+> es **130**, no 330.
+>
+> **Por qué falló la estimación.** Se había supuesto que el bucle interno se
+> vectorizaría. No lo hace, y no puede: la actualización de los dos máximos
+> (`if (d > b1) { b2 = b1; b1 = d; }`) es una **dependencia serial entre iteraciones**
+> — cada iteración necesita el `b1` de la anterior. Eso impide que el compilador use
+> AVX2, y encima mete una rama dependiente de los datos. El bucle corre escalar, a
+> ~1.4 evaluaciones por ciclo.
+>
+> Ese análisis es más valioso para el informe que haber acertado el número, y ya apunta
+> a una optimización concreta para la fase 2: llevar máximos parciales por carril SIMD y
+> reducirlos al final.
 
-| N | `T(N)` estimado | FPS estimados | ¿Cumple ≥30 FPS? |
+> **Varianza entre corridas.** Dos ejecuciones consecutivas de `make test` en la misma
+> máquina dieron `T_d = 1.175×10⁹` y `1.053×10⁹` — un **10 % de diferencia**, que mueve
+> el `N_crit` de 130 a 117. Las causas son el *turbo boost* (la frecuencia baja cuando el
+> núcleo se calienta) y que otros procesos comparten la caché L3.
+>
+> Esto no es ruido a ignorar: **es la razón por la que el enunciado exige 10 mediciones
+> por prueba** (Anexo 3). Una sola corrida no es un dato. Todos los números que vayan al
+> informe se reportan como media ± desviación sobre 10 repeticiones.
+
+### 3.1 Proyección secuencial (constantes medidas, `a` aún estimado)
+
+| N | `T(N)` | FPS | ¿Cumple ≥30 FPS? |
 |---:|---:|---:|:---:|
-| 100 | 11.1 ms | 90 | ✅ |
-| 200 | 20.7 ms | 48 | ✅ |
-| **330** | **33.1 ms** | **30.2** | ⚠️ **el filo** |
-| 500 | 49.4 ms | 20 | ❌ |
-| 1,000 | 97.3 ms | 10 | ❌ |
-| 3,000 | 289 ms | 3.5 | ❌ visiblemente trabado |
-| 8,000 | 767 ms | 1.3 | ❌ presentación de diapositivas |
+| 50 | 13.7 ms | 73.0 | ✅ |
+| 100 | 26.0 ms | 38.5 | ✅ |
+| **130** | **33.3 ms** | **30.0** | ⚠️ **el filo** |
+| 200 | 50.4 ms | 19.8 | ❌ |
+| 300 | 74.9 ms | 13.4 | ❌ |
+| 500 | 123.8 ms | 8.1 | ❌ |
+| 1,000 | 246.0 ms | 4.1 | ❌ visiblemente trabado |
+| 3,000 | 735.0 ms | 1.4 | ❌ pasa a ser un pase de diapositivas |
+| 8,000 | 1,957 ms | 0.5 | ❌ dos segundos por frame |
 
 ### 3.2 Proyección paralela
 
@@ -134,39 +163,50 @@ Con `p = 32` hilos (i9-13980HX de Esteban):
 
 | N | `f = a/T` | Speedup teórico | `T` paralelo | FPS paralelo |
 |---:|---:|---:|---:|---:|
-| 330 | 0.045 | 13.5× | 2.5 ms | ✅ 60 (tope de vsync) |
-| 1,000 | 0.015 | 21.6× | 4.5 ms | ✅ 60 (tope de vsync) |
-| 3,000 | 0.005 | 27.5× | 10.5 ms | ✅ 95 |
-| 8,000 | 0.002 | 30.2× | 25.4 ms | ✅ 39 |
-| **10,000** | 0.0016 | **30.6×** | **31.4 ms** | ⚠️ **32 — el nuevo filo** |
+| 130 | 0.0451 | 13.4× | 2.5 ms | ✅ tope de vsync |
+| 500 | 0.0121 | 23.3× | 5.3 ms | ✅ tope de vsync |
+| 1,000 | 0.0061 | 26.9× | 9.2 ms | ✅ 109 |
+| 3,000 | 0.0020 | 30.1× | 24.4 ms | ✅ 41 |
+| **4,000** | 0.0015 | **30.6×** | **32.1 ms** | ⚠️ **31 — el nuevo filo** |
 
 ```
-    N_crit^seq ≈    330          N_crit^omp ≈  10,000
+    N_crit^seq  ≈    130          N_crit^omp  ≈  4,000
     ──────────────────────────────────────────────────
-    Ganancia:  ~30× más elementos al mismo FPS objetivo
+    Ganancia:  ~31× más elementos al mismo FPS objetivo
 ```
 
-> ⚠️ Estos números son **predicciones del modelo**, con `T_d`, `T_p` y `a` estimados.
-> Los valores reales los produce `--bench` (§5). Si la medición no coincide con el
-> modelo, **gana la medición** y el modelo se recalibra: eso también va al informe, y
-> explicar *por qué* difiere (ancho de banda de memoria, vectorización, E-cores) vale
-> más que haber acertado.
+### 3.3 El N crítico depende de la resolución
 
-### 3.3 Nota sobre las tres máquinas del equipo
+Como `N_crit ∝ 1/P` y `P` crece con el cuadrado de la resolución, la resolución es una
+palanca directa sobre dónde se traba el programa. Con las mismas constantes medidas:
 
-`N_crit` **depende de la máquina** y cada quien mide la suya:
+| Resolución | `P` (píxeles de silueta) | `b` (ms/semilla) | `N_crit^seq` |
+|---|---:|---:|---:|
+| 640 × 480 *(mínimo del enunciado)* | 127,676 | 0.1087 | **293** |
+| **1280 × 720** *(por defecto)* | 287,285 | 0.2445 | **130** |
+| 1920 × 1080 | 646,392 | 0.5501 | **58** |
+
+**Consecuencia para la demo:** hay que reportar siempre `N_crit` **junto con la
+resolución**, porque solo no significa nada. Y si en la presentación hiciera falta un
+`N_crit` más alto para que la esfera se vea más rica, se baja la resolución en vez de
+tocar el algoritmo.
+
+### 3.4 Nota sobre las tres máquinas del equipo
+
+`N_crit` **depende de la máquina** y cada quien mide la suya con `make test`:
 
 | | Esteban | Nico | Dieguito |
 |---|---|---|---|
 | SO | Linux | macOS | Windows |
 | Hilos | 32 (i9-13980HX, híbrido P+E) | por medir | por medir |
-| `N_crit^seq` esperado | ~330 | similar (depende de IPC) | similar |
-| `N_crit^omp` esperado | ~10,000 | ∝ núcleos | ∝ núcleos |
+| `T_d` medido | **1.175 × 10⁹ /s** ✅ | por medir | por medir |
+| `N_crit^seq` @1280×720 | **130** ✅ | por medir | por medir |
+| `N_crit^omp` esperado | ~4,000 | ∝ núcleos | ∝ núcleos |
 
 `N_crit^seq` debería ser **parecido en las tres** (depende del IPC de un solo núcleo);
-`N_crit^omp` debería escalar con el número de núcleos. **Que las tres máquinas den el
-mismo `N_crit^seq` pero distinto `N_crit^omp` es, por sí solo, evidencia de que el
-speedup viene del paralelismo y no de otra cosa.** Las tres tablas van al informe.
+`N_crit^omp` debería escalar con el número de núcleos. **Que las tres máquinas den un
+`N_crit^seq` parecido pero un `N_crit^omp` muy distinto es, por sí solo, evidencia de que
+el speedup viene del paralelismo y no de otra cosa.** Las tres tablas van al informe.
 
 ---
 
@@ -250,17 +290,17 @@ directo.
 Esta es la secuencia exacta para la presentación. Tres comandos, dos minutos.
 
 ```bash
-# 1 — Secuencial, por debajo del filo: se ve fluido y bonito.
-./bin/screensaver_seq --n 300
-#    → ~33 FPS. "Así se ve nuestro screensaver."
+# 1 — Secuencial, justo debajo del filo: se ve fluido y bonito.
+./bin/screensaver_seq --n 130
+#    → ~30 FPS. "Así se ve nuestro screensaver."
 
-# 2 — Secuencial, MISMO programa, N diez veces mayor: se traba.
+# 2 — Secuencial, MISMO programa, N veintitrés veces mayor: se traba.
 ./bin/screensaver_seq --n 3000
-#    → ~3 FPS. La esfera avanza a tirones. El overlay marca los FPS en ROJO.
+#    → ~1.4 FPS. La esfera avanza a tirones. El overlay marca los FPS en ROJO.
 
 # 3 — Paralelo, MISMO N, MISMA máquina, MISMO código fuente.
 ./bin/screensaver_omp --n 3000 --threads 32
-#    → ~95 FPS. Fluido otra vez.
+#    → ~41 FPS. Fluido otra vez.
 ```
 
 Los pasos 2 y 3 corren **el mismo N sobre la misma máquina** y se diferencian únicamente
@@ -326,9 +366,9 @@ informe.
 | Pregunta | Respuesta |
 |---|---|
 | ¿Qué es N? | Semillas sobre la esfera de Fibonacci |
-| ¿Por qué es costoso? | Voronoi esférico por píxel: `O(P·N)`, `P ≈ 287,000` |
-| ¿Cuál es el kernel dominante? | El **render**, para todo `N < 10⁵` (§2.1) |
-| ¿Dónde se traba el secuencial? | `N ≈ 330` *(predicción; a medir)* |
-| ¿Hasta dónde llega el paralelo? | `N ≈ 10,000` con 32 hilos *(predicción; a medir)* |
+| ¿Por qué es costoso? | Voronoi esférico por píxel: `O(P·N)`, `P = 287,285` |
+| ¿Cuál es el kernel dominante? | El **render**, para todo `N < 2.4×10⁵` (§2.1) |
+| ¿Dónde se traba el secuencial? | **`N ≈ 130`** @1280×720 ✅ *medido* |
+| ¿Hasta dónde llega el paralelo? | `N ≈ 4,000` con 32 hilos *(predicción sobre constantes medidas)* |
 | ¿Cuál es la demo? | `seq --n 3000` (trabado) vs `omp --n 3000` (fluido) |
 | ¿Cuántas mediciones? | 10 repeticiones × 14 valores de N × 2 binarios |
