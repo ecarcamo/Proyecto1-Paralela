@@ -162,3 +162,20 @@ void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible
              cfg->voronoi ? "VORONOI" : "PUNTOS", n_visible);
     overlay_text(fb, x, y, buf, DIM, scale);
 }
+
+void overlay_physics(Framebuffer *fb, const Config *cfg, double divergence_deg)
+{
+    if (fb == NULL || fb->px == NULL || cfg == NULL) return;
+
+    const int scale = (fb->h >= 700) ? 2 : 1;
+    const int line_h = GLYPH_H * scale + 3;
+    const int x = 8;
+    /* misma columna que overlay_stats, una linea mas abajo (3 lineas + margen) */
+    const int y = 8 + line_h * 3;
+
+    const uint32_t DIM = 0xFFB0B0C0u;
+
+    char buf[64];
+    snprintf(buf, sizeof buf, "DIVERGENCIA=%.2f", divergence_deg);
+    overlay_text(fb, x, y, buf, DIM, scale);
+}

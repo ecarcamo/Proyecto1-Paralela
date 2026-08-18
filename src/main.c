@@ -27,8 +27,10 @@
 #include <stdlib.h>
 
 #include "args.h"
+#include "bench.h"
 #include "config.h"
 #include "overlay.h"
+#include "physics.h"
 #include "render.h"
 #include "sphere.h"
 #include "timing.h"
@@ -68,36 +70,9 @@ static int run_headless(Config *cfg)
     }
     regen_sphere(&seeds, cfg);
 
-    int total = (cfg->bench_frames > 0) ? cfg->bench_frames : 200;
-    int warmup = (total > SS_DEF_BENCH_WARMUP) ? SS_DEF_BENCH_WARMUP : 0;
-
-    double t = 0.0;
-    double sum_ms = 0.0;
-    int    measured = 0;
-
-    for (int f = 0; f < total; ++f) {
-        double a = now_seconds();
-        render_frame(&fb, &seeds, cfg, t);
-        double b = now_seconds();
-
-        t += 1.0 / 60.0;                    /* avance de tiempo simulado fijo */
-        if (f >= warmup) {                  /* descartar el calentamiento */
-            sum_ms += (b - a) * 1000.0;
-            ++measured;
-        }
-    }
-
-    double ms  = (measured > 0) ? sum_ms / measured : 0.0;
-    double fps = (ms > 0.0) ? 1000.0 / ms : 0.0;
-
-    if (cfg->csv) {
-        /* n,width,height,frames,ms_por_frame,fps */
-        printf("%d,%d,%d,%d,%.4f,%.2f\n",
-               cfg->n, cfg->width, cfg->height, measured, ms, fps);
-    } else {
-        printf("headless: N=%d  %dx%d  %d frames utiles  ->  %.3f ms/frame  (%.1f FPS)\n",
-               cfg->n, cfg->width, cfg->height, measured, ms, fps);
-    }
+    BenchStats st = bench_run(&fb, &seeds, cfg);
+    if (cfg->csv) bench_print_csv(&st, cfg);
+    else          bench_print_human(&st, cfg);
 
     rc = EXIT_SUCCESS;
 
@@ -212,9 +187,24 @@ static int run_window(Config *cfg)
         last = now;
         if (!cfg->paused) sim_t += dt;
 
+        /* -- fisica: repulsion de Coulomb + Verlet, solo si esta activa y no
+         *    en pausa. El clamp evita un dt gigante tras una pausa larga o un
+         *    hipo del sistema, que mandaria las semillas a volar de un salto. */
+        if (!cfg->paused && cfg->physics) {
+            double dt_phys = dt;
+            if (dt_phys > 0.1) dt_phys = 0.1;
+            PhysicsParams pp = { SS_DEF_PHYS_K, SS_DEF_PHYS_EPSILON,
+                                  SS_DEF_PHYS_GAMMA, SS_DEF_PHYS_MASS };
+            physics_step(&seeds, &pp, dt_phys);
+        }
+
         /* -- dibujo: render_frame se lleva el ~90% del tiempo ------------ */
         render_frame(&fb, &seeds, cfg, sim_t);
         overlay_stats(&fb, cfg, fps_ema, seeds.n);
+        if (cfg->physics) {
+            double div = sphere_mean_divergence_deg(&seeds);
+            overlay_physics(&fb, cfg, div);
+        }
 
         /* -- presentar --------------------------------------------------- */
         SDL_UpdateTexture(texture, NULL, fb.px, fb.w * (int)sizeof(uint32_t));

@@ -49,6 +49,19 @@ static inline uint32_t rgb_mul(uint32_t argb, float k)
     return rgb_packf(r * k, g * k, b * k);
 }
 
+/* Interpola entre dos colores. t=0 da 'a', t=1 da 'b'. Se usa para fundir el
+ * borde de una celda de Voronoi hacia el color de fondo (antialiasing). */
+static inline uint32_t rgb_lerp(uint32_t a, uint32_t b, float t)
+{
+    if (t <= 0.0f) return a;
+    if (t >= 1.0f) return b;
+
+    float ar, ag, ab, br, bg, bb;
+    rgb_unpackf(a, &ar, &ag, &ab);
+    rgb_unpackf(b, &br, &bg, &bb);
+    return rgb_packf(ar + (br - ar) * t, ag + (bg - ag) * t, ab + (bb - ab) * t);
+}
+
 /* Conversion HSV -> RGB. h, s, v en [0,1]; salida en [0,1]. */
 void color_hsv_to_rgb(float h, float s, float v, float *r, float *g, float *b);
 

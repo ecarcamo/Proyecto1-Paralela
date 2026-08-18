@@ -30,4 +30,11 @@ void overlay_text(Framebuffer *fb, int x, int y, const char *s,
  * binario secuencial y el paralelo corren EXACTAMENTE el mismo N. */
 void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible);
 
+/* Dibuja una 4ta linea con el angulo de divergencia medio actual (grados).
+ * Se llama aparte de overlay_stats -- separado a proposito, para no atar el
+ * contrato de overlay_stats a que exista fisica -- y solo tiene sentido si
+ * cfg->physics esta activo: es lo que deja ver en vivo como el angulo
+ * converge solo hacia 137.5 grados sin que se haya programado ese numero. */
+void overlay_physics(Framebuffer *fb, const Config *cfg, double divergence_deg);
+
 #endif /* OVERLAY_H */
