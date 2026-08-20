@@ -29,10 +29,15 @@
 #define RENDER_BG  0xFF0A0A12u
 
 /* Ancho de la banda de antialiasing entre celdas de Voronoi, en unidades de
- * producto punto. Chico a proposito: sobre la esfera unitaria best1-best2 se
- * mueve poco incluso lejos del borde, asi que una banda angosta ya alcanza
- * para suavizar sin comerse celdas enteras cuando N es grande. */
-#define EDGE_W  0.02f
+ * producto punto. NO puede ser una constante fija: el area de cada celda es
+ * ~4*pi/N, asi que el propio best1-best2 en el CENTRO de una celda (el punto
+ * mas lejos del borde posible) se achica con N -- medido: ~0.42 en N=12,
+ * ~0.019 en N=300, ~0.0015 en N=4000. Una banda fija se comia la celda
+ * entera en N chico (con N=300, un EDGE_W=0.02 dejaba TODA la celda dentro
+ * de la zona de borde, y se veian facetas grandes en vez de un patron fino).
+ * Por eso se escala con 1/N: EDGE_K se calibro para que la banda quede en una
+ * fraccion chica del gap tipico, en vez de comerse la celda. */
+#define EDGE_K  0.35f
 
 /* ==========================================================================
  *  Framebuffer
@@ -267,6 +272,13 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
      * no cambie al alternar --voronoi. */
     const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));
 
+    /* Ancho de la banda de borde para ESTE N: ver el comentario de EDGE_K
+     * arriba. Se calcula una vez por frame (invariante del bucle de pixeles),
+     * no una vez por pixel. */
+    int nseeds = s->n;
+    if (nseeds < 1) nseeds = 1;
+    float edge_w = EDGE_K / (float)nseeds;
+
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);
@@ -305,7 +317,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
             /* Borde de celda: best1-best2 es chico exactamente en la
              * frontera entre dos celdas, asi que un smoothstep sobre esa
              * diferencia da antialiasing analitico sin detectar aristas. */
-            float edge = f_smoothstep(0.0f, EDGE_W, best1 - best2);
+            float edge = f_smoothstep(0.0f, edge_w, best1 - best2);
             fb->px[j * w + i] = rgb_lerp(RENDER_BG, base, edge);
         }
     }
