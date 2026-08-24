@@ -67,6 +67,10 @@
 #define SS_DEF_PHYS_GAMMA    0.5f    /* friccion viscosa, sin ella no converge */
 #define SS_DEF_PHYS_MASS     1.0f    /* masa de cada semilla                  */
 
+/* Constante del limite de estabilidad dt_max = SAFETY/sqrt(N) de Verlet.
+ * Ver la tabla medida en include/physics.h (physics_max_dt). */
+#define SS_PHYS_DT_SAFETY    0.35
+
 /* ==========================================================================
  *  Config - una sola estructura para todo el programa.
  * ========================================================================== */

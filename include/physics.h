@@ -43,4 +43,30 @@ typedef struct {
  * ------------------------------------------------------------------------- */
 void physics_step(SeedSet *s, const PhysicsParams *p, double dt);
 
+/* ---------------------------------------------------------------------------
+ *  Paso de tiempo maximo ESTABLE para N semillas, en segundos.
+ *
+ *  Verlet es estable solo si dt es chico frente a la escala de la fuerza, y
+ *  esa escala CRECE con N: cada semilla siente la repulsion de las otras N-1,
+ *  asi que la aceleracion tipica va como N y el limite de estabilidad va como
+ *  1/sqrt(N). Medido en esta maquina (60 pasos, se considera inestable si
+ *  |v|max supera 3 o si el angulo medio se despega de 137.5):
+ *
+ *      N        dt maximo estable     dt*sqrt(N)
+ *      128          0.100               1.13
+ *      600          0.035               0.86
+ *      2000         0.0167              0.75
+ *      5000         0.010               0.71
+ *
+ *  El producto dt*sqrt(N) se queda plano en ~0.7-1.1, que es justo la ley
+ *  1/sqrt(N). La constante de abajo se toma en la mitad del peor caso medido
+ *  para dejar margen.
+ *
+ *  Sin este limite, con N grande el dt real del frame (que ademas es enorme
+ *  porque el frame tarda) hace explotar la integracion: las velocidades se
+ *  van a 500, las semillas se dispersan y el patron de Fibonacci desaparece
+ *  en menos de un segundo.
+ * ------------------------------------------------------------------------- */
+double physics_max_dt(int n);
+
 #endif /* PHYSICS_H */

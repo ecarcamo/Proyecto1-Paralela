@@ -151,7 +151,7 @@ void args_usage(const char *prog)
 "  --seed S         semilla del PRNG de colores       (def %llu)\n"
 "\n"
 "Kernels:\n"
-"  --physics 0|1    repulsion Douady-Couder          (def 1)\n"
+"  --physics 0|1    repulsion Douady-Couder          (def 0)\n"
 "  --voronoi 0|1    celdas (1) o solo puntos (0)      (def 1)\n"
 "\n"
 "Medicion:\n"

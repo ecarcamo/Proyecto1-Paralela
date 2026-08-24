@@ -38,12 +38,18 @@ BenchStats bench_run(Framebuffer *fb, SeedSet *s, const Config *cfg)
     PhysicsParams pp = { SS_DEF_PHYS_K, SS_DEF_PHYS_EPSILON,
                           SS_DEF_PHYS_GAMMA, SS_DEF_PHYS_MASS };
 
+    /* Mismo limite de estabilidad que usa el bucle con ventana: con N grande,
+     * 1/60 s ya pasa el tope de Verlet y la medicion correria sobre una nube
+     * de semillas explotada en vez de sobre la esfera. */
+    const double dt_phys = (1.0 / 60.0 < physics_max_dt(s->n))
+                         ? 1.0 / 60.0 : physics_max_dt(s->n);
+
     double t   = 0.0;
     int    idx = 0;
     for (int f = 0; f < total; ++f) {
         double a = now_seconds();
         render_frame(fb, s, cfg, t);
-        if (cfg->physics) physics_step(s, &pp, 1.0 / 60.0);
+        if (cfg->physics) physics_step(s, &pp, dt_phys);
         double b = now_seconds();
 
         t += 1.0 / 60.0;                    /* avance de tiempo simulado fijo */

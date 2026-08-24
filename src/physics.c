@@ -17,7 +17,18 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "config.h"
 #include "vec3.h"
+
+/* ==========================================================================
+ *  physics_max_dt - limite de estabilidad ~ 1/sqrt(N). La derivacion y la
+ *  tabla de medidas que fijan la constante estan en physics.h.
+ * ========================================================================== */
+double physics_max_dt(int n)
+{
+    if (n < 2) return 1.0;                 /* con 0 o 1 semilla no hay fuerzas */
+    return SS_PHYS_DT_SAFETY / sqrt((double)n);
+}
 
 /* ==========================================================================
  *  physics_step

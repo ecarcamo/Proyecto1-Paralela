@@ -26,7 +26,11 @@ Config config_defaults(void)
     cfg.sphere_frac  = SS_DEF_FILL;
     cfg.seed         = SS_DEF_SEED;
 
-    cfg.physics      = 1;
+    /* Apagada por defecto: con la fisica encendida las semillas se relajan y
+     * el patron aureo se convierte en un panal, o sea se deja de ver la esfera
+     * de Fibonacci que es el objeto del proyecto. Es una demo aparte, se
+     * enciende con --physics 1. */
+    cfg.physics      = 0;
     cfg.voronoi      = 1;
 
     cfg.bench_frames = 0;               /* 0 = modo ventana */
