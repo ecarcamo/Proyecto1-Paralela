@@ -152,7 +152,7 @@ void args_usage(const char *prog)
 "\n"
 "Kernels:\n"
 "  --physics 0|1    repulsion Douady-Couder          (def 0)\n"
-"  --voronoi 0|1    celdas (1) o solo puntos (0)      (def 1)\n"
+"  --voronoi 0|1    celdas (1) o bolitas (0)          (def 0)\n"
 "\n"
 "Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"

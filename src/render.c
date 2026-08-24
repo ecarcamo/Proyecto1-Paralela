@@ -129,12 +129,35 @@ Vec3 camera_ray(const Camera *cam, int i, int j, int w, int h)
 }
 
 /* ==========================================================================
- *  render_points - el dibujo de discos con z-buffer (baseline de Nico).
- *  Se conserva completo para --voronoi 0: mas barato, sirve de plan B si el
- *  raycasting se cae de FPS en alguna maquina.
+ *  render_points - cada semilla dibujada como una ESFERITA con z-buffer.
+ *
+ *  Antes cada semilla era un disco de color PLANO. Por eso el resultado se
+ *  veia como confeti y no como la figura de referencia: una bolita real tiene
+ *  relieve propio (su lado iluminado y su lado oscuro) y un brillo especular.
+ *  Aca el disco se sombrea POR PIXEL reconstruyendo la normal de una esfera:
+ *  dentro del disco, con (u,v) las coordenadas locales normalizadas a [-1,1],
+ *
+ *      nz = sqrt(1 - u^2 - v^2)      ->  normal = (u, v, nz)
+ *
+ *  que es la misma identidad de la esfera unitaria que usa el raycasting, solo
+ *  que en el espacio local del disco. Cuesta un sqrt por pixel de bolita, y a
+ *  cambio la figura pasa de puntos planos a esferas.
  * ========================================================================== */
-static void draw_disc(Framebuffer *fb, float *zbuf,
-                      int cx, int cy, int radius, float depth, uint32_t color)
+
+/* Luz en el espacio del DISCO: x a la derecha, y hacia abajo, z hacia el ojo.
+ * Arriba-izquierda y al frente, que es de donde viene la luz en la referencia. */
+#define BALL_LX  (-0.45f)
+#define BALL_LY  (-0.55f)
+#define BALL_LZ   (0.70f)
+#define BALL_SPEC_POW  28.0f   /* dureza del brillo: alto = punto chico y duro */
+#define BALL_SPEC_K    0.55f   /* cuanto blanco mete el brillo, 0..1          */
+
+/* Fraccion del radio "que se tocan" (1.9/sqrt(N)) que se usa de verdad.
+ * Ver el calculo en render_points. */
+#define BALL_FILL      1.60f
+
+static void draw_ball(Framebuffer *fb, float *zbuf, int cx, int cy, int radius,
+                      float depth, float r_world, uint32_t color, float k_world)
 {
     const int w = fb->w, h = fb->h;
 
@@ -145,17 +168,47 @@ static void draw_disc(Framebuffer *fb, float *zbuf,
     if (x1 >= w) x1 = w - 1;
     if (y1 >= h) y1 = h - 1;
 
-    const int r2 = radius * radius;
+    const float inv_r = 1.0f / (float)radius;
+
+    /* Vector medio de Blinn-Phong: L + V con V = (0,0,1), normalizado. Es
+     * constante para todas las bolitas, asi que se calcula una vez aca. */
+    const float hx = BALL_LX, hy = BALL_LY, hz = BALL_LZ + 1.0f;
+    const float hinv = 1.0f / sqrtf(hx * hx + hy * hy + hz * hz);
+    const float Hx = hx * hinv, Hy = hy * hinv, Hz = hz * hinv;
+
     for (int y = y0; y <= y1; ++y) {
-        int dy = y - cy;
+        float v = (float)(y - cy) * inv_r;
         for (int x = x0; x <= x1; ++x) {
-            int dx = x - cx;
-            if (dx * dx + dy * dy > r2) continue;      /* fuera del disco */
+            float u = (float)(x - cx) * inv_r;
+
+            float rr = u * u + v * v;
+            if (rr > 1.0f) continue;                   /* fuera de la bolita */
+
+            /* Normal de la esferita y su profundidad propia: el polo de la
+             * bolita esta r_world mas cerca del ojo que su centro, asi las
+             * bolitas que se solapan se recortan entre si de forma correcta
+             * en vez de taparse enteras. */
+            float nz = sqrtf(1.0f - rr);
+            float z  = depth - nz * r_world;
 
             int k = y * w + x;
-            if (depth >= zbuf[k]) continue;            /* algo mas cerca ya esta */
-            zbuf[k]   = depth;
-            fb->px[k] = color;
+            if (z >= zbuf[k]) continue;                /* algo mas cerca ya esta */
+
+            /* Difusa local (el relieve de la bolita) modulada por k_world (de
+             * que lado de la esfera GRANDE esta), mas el brillo especular. */
+            float nd = u * BALL_LX + v * BALL_LY + nz * BALL_LZ;
+            if (nd < 0.0f) nd = 0.0f;
+            float shade = k_world * (0.25f + 0.75f * nd);
+
+            float nh = u * Hx + v * Hy + nz * Hz;
+            float spec = 0.0f;
+            if (nh > 0.0f) spec = powf(nh, BALL_SPEC_POW) * BALL_SPEC_K * k_world;
+
+            uint32_t px = rgb_mul(color, shade);
+            if (spec > 0.004f) px = rgb_lerp(px, 0xFFFFFFFFu, spec);
+
+            zbuf[k]   = z;
+            fb->px[k] = px;
         }
     }
 }
@@ -174,6 +227,7 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
 
     Camera cam = camera_make(cfg);
     const float aspect = (float)w / (float)h;
+    const float cam_dist = v3_len(cam.origin);   /* la camara mira al origen */
 
     /* Giro del frame: rotacion alrededor de Y por el tiempo, mas una
      * inclinacion fija en X para que la esfera no se vea plana de frente. */
@@ -186,16 +240,25 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
      * que el lado opuesto se vea mas oscuro. */
     const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));
 
-    /* Radio del disco en pixeles: parte del radio proyectado de la esfera y se
-     * reparte entre las N semillas, con topes para que ni desaparezca ni se
-     * empaste. Con N grande los discos se achican y aparece el grano fino. */
+    /* Radio de la bolita en pixeles. NO es un numero a ojo: en un empaque
+     * hexagonal sobre la esfera cada semilla ocupa 4*pi/N de area, y de ahi la
+     * distancia al vecino mas cercano sale d = sqrt(8*pi/(sqrt(3)*N)) ~
+     * 3.81/sqrt(N) radianes. Para que las bolitas se TOQUEN el radio tiene que
+     * ser d/2 ~ 1.9/sqrt(N). Con el 1.0/sqrt(N) que habia antes las bolitas
+     * salian a la mitad de tamano y por eso la esfera se veia como puntos
+     * sueltos en vez del empaque compacto de la referencia.
+     *
+     * BALL_FILL se queda un poco abajo del 1.9 teorico: al llegar al borde de
+     * la silueta el escorzo junta las bolitas, y con el valor exacto el borde
+     * se empasta. */
     const float sphere_px = (cfg != NULL ? (float)cfg->sphere_frac : (float)SS_DEF_FILL)
                             * (float)h * 0.5f;
     int nseeds = s->n;
     if (nseeds < 1) nseeds = 1;
-    int radius = (int)(sphere_px / sqrtf((float)nseeds) + 0.5f);
-    if (radius < 1)  radius = 1;
-    if (radius > 14) radius = 14;
+    int radius = (int)(sphere_px * BALL_FILL / sqrtf((float)nseeds) + 0.5f);
+    const int radius_max = (int)(sphere_px * 0.5f);
+    if (radius < 1) radius = 1;
+    if (radius > radius_max && radius_max >= 1) radius = radius_max;
 
     for (int idx = 0; idx < s->n; ++idx) {
         /* Posicion rotada de la semilla (sigue sobre la esfera unitaria). */
@@ -221,7 +284,17 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
         if (diff < 0.0f) diff = 0.0f;
         float k = 0.28f + 0.72f * diff;               /* piso ambiente + difusa */
 
-        draw_disc(fb, zbuf, sx, sy_px, radius, cz, rgb_mul(s->color[idx], k));
+        /* Radio con perspectiva: las bolitas del frente se ven mas grandes que
+         * las del fondo. Sin esto todas salen del mismo tamano y la esfera se
+         * aplana. cam_dist/cz es el factor de escala de la proyeccion. */
+        int r_px = (int)((float)radius * (cam_dist / cz) + 0.5f);
+        if (r_px < 1) r_px = 1;
+
+        /* Radio de la bolita en unidades de MUNDO, para su z-buffer propio:
+         * sphere_px pixeles equivalen a 1 radio de la esfera grande. */
+        float r_world = (float)radius / sphere_px;
+
+        draw_ball(fb, zbuf, sx, sy_px, r_px, cz, r_world, s->color[idx], k);
     }
 
     free(zbuf);

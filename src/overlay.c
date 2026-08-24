@@ -154,7 +154,7 @@ void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible
 
     /* --- Linea 3: modo de dibujo y semillas visibles este frame. ---------- */
     snprintf(buf, sizeof buf, "%s  VIS=%d",
-             cfg->voronoi ? "VORONOI" : "PUNTOS", n_visible);
+             cfg->voronoi ? "VORONOI" : "BOLITAS", n_visible);
     overlay_text(fb, x, y, buf, DIM, scale);
 }
 

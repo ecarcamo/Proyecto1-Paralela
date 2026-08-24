@@ -31,7 +31,11 @@ Config config_defaults(void)
      * de Fibonacci que es el objeto del proyecto. Es una demo aparte, se
      * enciende con --physics 1. */
     cfg.physics      = 0;
-    cfg.voronoi      = 1;
+    /* Por defecto la esfera se dibuja con BOLITAS: es la figura de referencia
+     * del proyecto (esfera de Fibonacci con una esferita por semilla). El
+     * raycasting con celdas de Voronoi -- que es el kernel pesado a
+     * paralelizar -- sigue disponible con --voronoi 1. */
+    cfg.voronoi      = 0;
 
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
@@ -120,7 +124,7 @@ void config_print(const Config *cfg)
     printf("  velocidad de giro : %.3f rad/s\n", cfg->rot_speed);
     printf("  semilla PRNG      : %llu\n",       (unsigned long long)cfg->seed);
     printf("  fisica            : %s\n",         cfg->physics ? "si" : "no");
-    printf("  voronoi           : %s\n",         cfg->voronoi ? "celdas" : "puntos");
+    printf("  voronoi           : %s\n",         cfg->voronoi ? "celdas" : "bolitas");
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);
