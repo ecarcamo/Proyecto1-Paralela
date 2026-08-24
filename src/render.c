@@ -28,11 +28,28 @@
  * semillas sin ser un negro plano que se ve barato. */
 #define RENDER_BG  0xFF0A0A12u
 
-/* Ancho de la banda de antialiasing entre celdas de Voronoi, en unidades de
- * producto punto. Chico a proposito: sobre la esfera unitaria best1-best2 se
- * mueve poco incluso lejos del borde, asi que una banda angosta ya alcanza
- * para suavizar sin comerse celdas enteras cuando N es grande. */
-#define EDGE_W  0.02f
+/* Ancho de la banda de antialiasing entre celdas de Voronoi.
+ *
+ * NO puede ser una constante fija: la medida que se compara es best1-best2,
+ * una diferencia de productos punto, y esa diferencia ENCOGE con N. Cada
+ * celda cubre 4*pi/N de area, o sea un radio angular de ~2/sqrt(N) rad, y en
+ * el centro de la celda la diferencia vale como mucho 1-cos(2*theta) ~ 8/N.
+ * Con un ancho fijo de 0.02 y N=3000 (donde 8/N = 0.0027) TODO el pixel cae
+ * dentro de la banda de borde y la esfera entera se funde con el fondo: se ve
+ * negra. Por eso la banda se deriva de N y se queda en una fraccion chica de
+ * esa diferencia maxima, que es lo que la vuelve una linea fina a cualquier N.
+ *
+ * EDGE_FRAC es esa fraccion (15% del salto maximo). El clamp superior evita
+ * que con N muy chico (1..4 celdas gigantes) la banda se coma media esfera. */
+#define EDGE_FRAC  0.15f
+#define EDGE_MAX   0.05f
+
+static inline float edge_width_for(int n)
+{
+    if (n < 1) n = 1;
+    float w = EDGE_FRAC * 8.0f / (float)n;
+    return (w > EDGE_MAX) ? EDGE_MAX : w;
+}
 
 /* ==========================================================================
  *  Framebuffer
@@ -267,6 +284,10 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
      * no cambie al alternar --voronoi. */
     const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));
 
+    /* Ancho del borde de celda para ESTE N (ver EDGE_FRAC arriba). Se calcula
+     * una vez por frame, no por pixel. */
+    const float edge_w = edge_width_for(s->n);
+
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);
@@ -305,7 +326,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
             /* Borde de celda: best1-best2 es chico exactamente en la
              * frontera entre dos celdas, asi que un smoothstep sobre esa
              * diferencia da antialiasing analitico sin detectar aristas. */
-            float edge = f_smoothstep(0.0f, EDGE_W, best1 - best2);
+            float edge = f_smoothstep(0.0f, edge_w, best1 - best2);
             fb->px[j * w + i] = rgb_lerp(RENDER_BG, base, edge);
         }
     }
