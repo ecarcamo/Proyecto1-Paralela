@@ -112,7 +112,8 @@ typedef struct {
 
     /* --- que kernels se activan --------------------------------------- */
     int      physics;       /* --physics  0|1  repulsion Douady-Couder       */
-    int      voronoi;       /* --voronoi  0|1  celdas (1) o puntos (0)       */
+    int      voronoi;       /* --voronoi  0|1  celdas (1) o bolitas (0)      */
+    int      raster;        /* --raster   0|1  bolitas rasterizadas (plan B) */
 
     /* --- modo medicion ------------------------------------------------ */
     int      bench_frames;  /* --bench K  0 = modo ventana normal            */

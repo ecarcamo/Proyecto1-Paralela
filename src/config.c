@@ -40,6 +40,12 @@ Config config_defaults(void)
      * raycasting con celdas de Voronoi -- que es el kernel pesado a
      * paralelizar -- sigue disponible con --voronoi 1. */
     cfg.voronoi      = 0;
+    /* Las bolitas se resuelven por RAYCASTING, no rasterizando discos. El
+     * rasterizado sigue disponible con --raster 1, pero no es el baseline: su
+     * costo es casi constante en N (el area total pintada no depende de N) y
+     * no se paraleliza por semillas sin una carrera en el z-buffer. Ver el
+     * comentario largo de render_balls_raycast(). */
+    cfg.raster       = 0;
 
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
@@ -153,7 +159,10 @@ void config_print(const Config *cfg)
         printf("  deriva de color   : apagada (color fijo)\n");
     printf("  semilla PRNG      : %llu\n",       (unsigned long long)cfg->seed);
     printf("  fisica            : %s\n",         cfg->physics ? "si" : "no");
-    printf("  voronoi           : %s\n",         cfg->voronoi ? "celdas" : "bolitas");
+    printf("  kernel            : %s\n",
+           cfg->voronoi ? "celdas de Voronoi (raycasting, O(P*N))"
+                        : (cfg->raster ? "bolitas rasterizadas (plan B, ~O(1) en N)"
+                                       : "bolitas por raycasting (O(P*N))"));
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);

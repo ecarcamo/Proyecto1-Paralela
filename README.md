@@ -59,7 +59,8 @@ que adivinar.
 ## Uso
 
 ```bash
-./bin/screensaver_seq --n 128          # ~30 FPS: el filo del secuencial
+./bin/screensaver_seq --n 128          # ~11 FPS con el kernel por defecto
+./bin/screensaver_seq --n 128 --raster 1   # ~122 FPS: el plan B que no escala
 ./bin/screensaver_seq --n 3000         # ~1.4 FPS: se traba a proposito
 ./bin/screensaver_omp --n 3000         # ~41 FPS: mismo N, fluido otra vez
 ```
@@ -79,12 +80,45 @@ que adivinar.
 | `--color-speed <v>` | Vueltas del círculo de tono por segundo (0 = color fijo) | 0.06 |
 | `--color-spread <f>` | Dispersión de ese ritmo entre semillas, 0..1 | 0.65 |
 | `--physics <0\|1>` | Repulsión tipo Douady–Couder | 1 |
-| `--voronoi <0\|1>` | Celdas de Voronoi vs. puntos | 1 |
+| `--voronoi <0\|1>` | Celdas de Voronoi vs. bolitas | 0 |
+| `--raster <0\|1>` | Bolitas rasterizadas (plan B barato, **no escala con N**) | 0 |
 | `--threads <int>` | Hilos de OpenMP | máximo del sistema |
 | `--bench <K>` | Corre K frames sin ventana y reporta tiempos | 0 |
 | `--no-render` | Modo headless | off |
 | `--csv` | Salida en CSV para graficar | off |
 | `--help` | Ayuda | |
+
+### Los tres kernels y su costo
+
+| Modo | Qué hace | Costo | N=128 | N=3000 |
+|---|---|---|---|---|
+| por defecto | bolitas por **raycasting** | O(P·N) | 90 ms | 1241 ms |
+| `--voronoi 1` | celdas de Voronoi por raycasting | O(P·N) | 51 ms | 1189 ms |
+| `--raster 1` | bolitas **rasterizadas** | ~O(1) en N | 8 ms | 10 ms |
+
+*(medido a 1280×720 en el i9-13980HX, un hilo)*
+
+Las bolitas se resuelven **por píxel**, no rasterizando discos. El rasterizado sigue
+disponible con `--raster 1`, pero no es el baseline y no debe usarse para medir, por dos
+razones que se ven en la tabla:
+
+1. **Su costo es casi constante en N.** El radio va como `1/√N`, o sea el área de cada
+   bolita va como `1/N`, y hay N bolitas: **el área total pintada no depende de N**.
+   Medido, multiplicar N por 1562 (de 128 a 200 000) solo multiplica el costo por 4.8, y
+   ese poco que crece es el bucle O(N) de proyectar, no los píxeles. Con ese kernel N no
+   es una perilla de carga.
+2. **No se paraleliza por semillas.** Dos bolitas que se solapan hacen read-modify-write
+   del mismo z-buffer: es una carrera de datos.
+
+Invertir el bucle arregla las dos cosas: pasa a ser O(P·N) —el mismo modelo de costo que
+el Voronoi— y cada píxel es independiente, así que el `parallel for` entra sin carreras,
+sin atómicos y sin z-buffer. La imagen además mejora, porque la oclusión entre bolitas
+pasa a ser exacta por píxel.
+
+> El test rayo-esfera cuesta la mitad de lo normal aprovechando dos regalos del problema:
+> los centros están sobre la esfera **unitaria** y la cámara está sobre el eje z. Queda en
+> el mismo producto punto que ya hacía el Voronoi más tres operaciones, y el `sqrt` pasa a
+> ser uno por píxel en vez de uno por semilla. Ver el comentario de `render_balls_raycast()`.
 
 ### Deriva de color
 

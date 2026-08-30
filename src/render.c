@@ -165,6 +165,26 @@ Vec3 camera_ray(const Camera *cam, int i, int j, int w, int h)
  * Ver el calculo en render_points. */
 #define BALL_FILL      1.60f
 
+/* ---------------------------------------------------------------------------
+ *  Radio de la bolita en unidades de MUNDO (la esfera grande tiene radio 1).
+ *
+ *  Es el mismo calculo que hacia render_points en pixeles, movido aca para que
+ *  el rasterizado y el raycasting usen EXACTAMENTE el mismo tamano: si cada uno
+ *  tuviera su formula, cambiar --voronoi cambiaria el tamano de las bolitas y
+ *  las dos rutas dejarian de ser comparables al medir.
+ *
+ *  En un empaque hexagonal sobre la esfera cada semilla ocupa 4*pi/N de area,
+ *  de donde la distancia al vecino mas cercano es ~3.81/sqrt(N) radianes y el
+ *  radio para que se TOQUEN es la mitad. BALL_FILL se queda un poco abajo de
+ *  ese 1.9 teorico porque en el borde de la silueta el escorzo las junta.
+ * ------------------------------------------------------------------------- */
+static float ball_world_radius(int n)
+{
+    if (n < 1) n = 1;
+    float r = BALL_FILL / sqrtf((float)n);
+    return (r > 0.5f) ? 0.5f : r;      /* con N chico, que no se coma la esfera */
+}
+
 /* ==========================================================================
  *  frame_colors - el color de las N semillas EN ESTE INSTANTE.
  *
@@ -328,12 +348,8 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
      * se empasta. */
     const float sphere_px = (cfg != NULL ? (float)cfg->sphere_frac : (float)SS_DEF_FILL)
                             * (float)h * 0.5f;
-    int nseeds = s->n;
-    if (nseeds < 1) nseeds = 1;
-    float radius = sphere_px * BALL_FILL / sqrtf((float)nseeds);
-    const float radius_max = sphere_px * 0.5f;
+    float radius = ball_world_radius(s->n) * sphere_px;
     if (radius < 0.5f) radius = 0.5f;      /* mas chico que esto ya no se ve */
-    if (radius > radius_max) radius = radius_max;
 
     for (int idx = 0; idx < s->n; ++idx) {
         /* Posicion rotada de la semilla (sigue sobre la esfera unitaria). */
@@ -490,13 +506,200 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
 }
 
 /* ==========================================================================
- *  render_frame - despacha entre Voronoi (por defecto) y puntos (--voronoi 0).
- *  La firma es el contrato con main.c y no cambia (ver render.h).
+ *  render_balls_raycast - las MISMAS bolitas, pero resueltas por pixel.
+ *
+ *  Por que existe, si render_points ya las dibujaba: porque el rasterizado
+ *  tiene un costo casi CONSTANTE en N y por lo tanto no sirve para lo que este
+ *  proyecto mide. El radio va como 1/sqrt(N), o sea el area de cada bolita va
+ *  como 1/N, y hay N bolitas: el area total pintada NO depende de N. Medido a
+ *  1280x720, multiplicar N por 1562 (de 128 a 200000) solo multiplica el costo
+ *  por 4.8, y ese poco que crece es el bucle O(N) de proyectar, no los pixeles.
+ *  Con ese kernel, N no es una perilla de carga.
+ *
+ *  Ademas el rasterizado NO se puede paralelizar por semillas tal cual: dos
+ *  bolitas que se solapan hacen read-modify-write del mismo z-buffer, que es
+ *  una carrera de datos.
+ *
+ *  Invertir el bucle arregla las dos cosas de un golpe: pasa a ser O(P*N) --
+ *  el mismo modelo de costo que el Voronoi -- y cada pixel es independiente,
+ *  asi que el 'parallel for' entra sin carreras, sin atomicos y sin z-buffer.
+ *  La imagen ademas MEJORA: la oclusion entre bolitas pasa a ser exacta por
+ *  pixel en vez de aproximada con profundidad por pixel.
+ *
+ *  ---- el test rayo-esfera, barato ----------------------------------------
+ *  Un test generico cuesta ~16 flops por semilla. Aca sale en la mitad usando
+ *  dos cosas que este problema regala: los centros estan sobre la esfera
+ *  UNITARIA (|C| = 1) y la camara esta en el eje z, O = (0, 0, dist).
+ *
+ *      |C - O|^2 = 1 - 2*dist*C.z + dist^2      <- un solo madd desde C.z
+ *      b         = (C - O).d = C.d - dist*d.z   <- el producto punto de siempre
+ *      perp^2    = |C - O|^2 - b^2              <- distancia rayo-centro
+ *
+ *  y pega si perp^2 < r^2. O sea: el mismo producto punto C.d que ya hace el
+ *  Voronoi, mas tres operaciones. El sqrt aparece UNA vez por pixel (para la
+ *  bolita ganadora), no una vez por semilla.
+ * ========================================================================== */
+
+/* ---------------------------------------------------------------------------
+ *  Sombreado de un impacto. Son DOS niveles multiplicados, igual que en el
+ *  rasterizado, y el de afuera no es decorativo:
+ *
+ *    k_world  de que lado de la esfera GRANDE esta la semilla. Funciona como
+ *             una oclusion ambiental barata -- una bolita del lado oscuro esta
+ *             rodeada de vecinas que le tapan la luz -- y es lo unico que le da
+ *             VOLUMEN al conjunto. Sin este factor cada bolita se ilumina solo
+ *             por su propia normal, todas quedan igual de brillantes y la
+ *             esfera se aplana: se ve como un mosaico de bolitas y no como un
+ *             objeto redondo.
+ *    relieve   la normal VERDADERA de la bolita en el punto de impacto. Aca
+ *             esta la mejora sobre el rasterizado, que la reconstruia en el
+ *             espacio del disco: esta es exacta y con perspectiva correcta.
+ *
+ *  Las constantes son las mismas que usaba render_points a proposito, para que
+ *  cambiar de kernel no cambie el look.
+ * ------------------------------------------------------------------------- */
+static uint32_t shade_ball(Vec3 center, Vec3 nrm, Vec3 dir, Vec3 light, uint32_t color)
+{
+    float kw = v3_dot(center, light);         /* la normal de la esfera grande */
+    if (kw < 0.0f) kw = 0.0f;
+    kw = 0.28f + 0.72f * kw;                  /* piso ambiente + difusa */
+
+    float nd = v3_dot(nrm, light);
+    if (nd < 0.0f) nd = 0.0f;
+
+    uint32_t px = rgb_mul(color, kw * (0.25f + 0.75f * nd));
+
+    /* Vector medio de Blinn-Phong: L + V, con V = -dir (del punto hacia el ojo). */
+    Vec3  hv = v3_norm(v3_sub(light, dir));
+    float nh = v3_dot(nrm, hv);
+    if (nh > 0.0f) {
+        float spec = powf(nh, BALL_SPEC_POW) * BALL_SPEC_K * kw;
+        if (spec > 0.004f) px = rgb_lerp(px, 0xFFFFFFFFu, spec);
+    }
+    return px;
+}
+
+static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
+                                 const Config *cfg, double t)
+{
+    const int w = fb->w, h = fb->h;
+
+    float *rx = (float *)malloc((size_t)s->n * sizeof(float));
+    float *ry = (float *)malloc((size_t)s->n * sizeof(float));
+    float *rz = (float *)malloc((size_t)s->n * sizeof(float));
+    if (rx == NULL || ry == NULL || rz == NULL) {
+        free(rx); free(ry); free(rz);
+        return;                                        /* sin memoria, no crash */
+    }
+
+    const float ang  = (float)(t * ((cfg != NULL) ? cfg->rot_speed : SS_DEF_ROT_SPEED));
+    const float sy   = sinf(ang),  cyv = cosf(ang);
+    const float tilt = 0.42f;                 /* mismo encuadre que los otros modos */
+    const float stx  = sinf(tilt), ctx = cosf(tilt);
+    rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz);
+
+    uint32_t       *anim_col = frame_colors(s, cfg, t);
+    const uint32_t *col      = (anim_col != NULL) ? anim_col : s->color;
+
+    Camera      cam   = camera_make(cfg);
+    const Vec3  light = v3_norm(v3(-0.4f, 0.6f, 0.7f));   /* la luz de siempre */
+    const float dist  = cam.origin.z;                     /* O = (0, 0, dist)  */
+    const float oc_k  = 1.0f + dist * dist;               /* |C-O|^2 = oc_k - 2*dist*C.z */
+
+    const float r  = ball_world_radius(s->n);
+    const float r2 = r * r;
+
+    /* Tamano de un pixel en unidades de mundo, por unidad de profundidad. Es
+     * lo que convierte la distancia rayo-centro en COBERTURA, que es lo que da
+     * el borde suave: la misma rampa de un pixel del rasterizado, pero medida
+     * en el mundo en vez de en la pantalla. */
+    const float pix_k = 2.0f * cam.tan_half_fov / (float)h;
+
+    for (int j = 0; j < h; ++j) {
+        for (int i = 0; i < w; ++i) {
+            Vec3 d = camera_ray(&cam, i, j, w, h);
+
+            /* Rechazo del fondo: si el rayo ni siquiera roza la esfera que
+             * ENVUELVE a las bolitas (radio 1 + r), no hay nada que probar y
+             * nos ahorramos las N iteraciones. Es el mismo truco con el que el
+             * Voronoi descarta el fondo en ~10 ciclos. */
+            float thit;
+            if (!ray_sphere_hit(cam.origin, d, v3(0.0f, 0.0f, 0.0f), 1.0f + r, &thit)) {
+                fb->px[j * w + i] = RENDER_BG;
+                continue;
+            }
+
+            const float od = dist * d.z;      /* O.d, con O sobre el eje z */
+
+            /* Las DOS bolitas mas cercanas al ojo sobre este rayo. La segunda
+             * solo se usa para el borde suave: en el pixel donde la de adelante
+             * cubre medio pixel, lo que asoma detras es su vecina, no el fondo,
+             * y mezclar contra el fondo dibujaria una costura negra en cada
+             * contacto. */
+            float t1 = INFINITY, p1 = 0.0f;  int w1 = -1;
+            float t2 = INFINITY;             int w2 = -1;
+
+            for (int k = 0; k < s->n; ++k) {
+                float b = rx[k] * d.x + ry[k] * d.y + rz[k] * d.z - od;
+                if (b <= 0.0f) continue;                  /* bolita detras del ojo */
+
+                float perp2 = (oc_k - 2.0f * dist * rz[k]) - b * b;
+                if (perp2 >= r2) continue;                /* el rayo pasa de largo */
+
+                float tt = b - sqrtf(r2 - perp2);         /* cara de adelante */
+                if (tt < t1) {
+                    t2 = t1; w2 = w1;
+                    t1 = tt; p1 = perp2; w1 = k;
+                } else if (tt < t2) {
+                    t2 = tt; w2 = k;
+                }
+            }
+
+            if (w1 < 0) {                                  /* pego el envolvente, */
+                fb->px[j * w + i] = RENDER_BG;             /* pero ninguna bolita */
+                continue;
+            }
+
+            /* Normal verdadera: del centro de la bolita al punto de impacto. */
+            Vec3 c1  = v3(rx[w1], ry[w1], rz[w1]);
+            Vec3 q    = v3_madd(cam.origin, d, t1);
+            Vec3 nrm  = v3_scale(v3_sub(q, c1), 1.0f / r);
+            uint32_t px = shade_ball(c1, nrm, d, light, col[w1]);
+
+            /* Cobertura: que fraccion del pixel cae dentro de la bolita. */
+            float cov = (r - sqrtf(p1)) / (pix_k * t1) + 0.5f;
+            if (cov < 1.0f) {
+                uint32_t detras = RENDER_BG;
+                if (w2 >= 0) {
+                    Vec3 c2 = v3(rx[w2], ry[w2], rz[w2]);
+                    Vec3 q2 = v3_madd(cam.origin, d, t2);
+                    Vec3 n2 = v3_scale(v3_sub(q2, c2), 1.0f / r);
+                    detras = shade_ball(c2, n2, d, light, col[w2]);
+                }
+                px = rgb_lerp(detras, px, (cov < 0.0f) ? 0.0f : cov);
+            }
+
+            fb->px[j * w + i] = px;
+        }
+    }
+
+    free(anim_col);
+    free(rx); free(ry); free(rz);
+}
+
+/* ==========================================================================
+ *  render_frame - despacha entre los tres kernels. La firma es el contrato
+ *  con main.c y no cambia (ver render.h).
+ *
+ *      --voronoi 1   celdas de Voronoi por raycasting      O(P*N)
+ *      (por defecto) bolitas por raycasting                O(P*N)
+ *      --raster 1    bolitas rasterizadas (plan B barato)  ~O(1) en N
  * ========================================================================== */
 void render_frame(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
 {
     if (fb == NULL || fb->px == NULL || s == NULL) return;
 
-    if (cfg != NULL && cfg->voronoi) render_raycast(fb, s, cfg, t);
-    else                             render_points(fb, s, cfg, t);
+    if (cfg != NULL && cfg->voronoi)     render_raycast(fb, s, cfg, t);
+    else if (cfg != NULL && cfg->raster) render_points(fb, s, cfg, t);
+    else                                 render_balls_raycast(fb, s, cfg, t);
 }

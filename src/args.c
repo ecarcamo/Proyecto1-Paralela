@@ -157,6 +157,7 @@ void args_usage(const char *prog)
 "Kernels:\n"
 "  --physics 0|1    repulsion Douady-Couder          (def 0)\n"
 "  --voronoi 0|1    celdas (1) o bolitas (0)          (def 0)\n"
+"  --raster 0|1     bolitas rasterizadas: plan B barato, NO escala con N\n"
 "\n"
 "Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"
@@ -275,6 +276,9 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
         }
         else if (strcmp(a, "--voronoi") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->voronoi) != 0) goto bad;
+        }
+        else if (strcmp(a, "--raster") == 0) {
+            if (take_bool(argc, argv, &i, a, &cfg->raster) != 0) goto bad;
         }
         else if (strcmp(a, "--vsync") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->vsync) != 0) goto bad;

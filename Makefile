@@ -125,4 +125,9 @@ print-config:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /'
 
--include $(LIB_OBJS_SEQ:.o=.d)
+# Los .d de -MMD: sin esto, tocar un .h NO recompila lo que lo incluye.
+# MAIN_OBJ_SEQ tiene que estar: main.c incluye config.h, y cuando faltaba,
+# agregar un campo a Config dejaba main.o compilado contra la estructura VIEJA
+# -- misma direccion, offsets corridos -- y el programa leia basura en los
+# campos de mas abajo sin que nada fallara al compilar ni al enlazar.
+-include $(LIB_OBJS_SEQ:.o=.d) $(MAIN_OBJ_SEQ:.o=.d)
