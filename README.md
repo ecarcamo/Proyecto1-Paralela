@@ -76,6 +76,8 @@ que adivinar.
 | `--height <int>` | Alto del canvas (mínimo 480) | 720 |
 | `--angle <grados>` | Ángulo de divergencia | 137.50776 |
 | `--seed <uint>` | Semilla del PRNG (determinista) | 12345 |
+| `--color-speed <v>` | Vueltas del círculo de tono por segundo (0 = color fijo) | 0.06 |
+| `--color-spread <f>` | Dispersión de ese ritmo entre semillas, 0..1 | 0.65 |
 | `--physics <0\|1>` | Repulsión tipo Douady–Couder | 1 |
 | `--voronoi <0\|1>` | Celdas de Voronoi vs. puntos | 1 |
 | `--threads <int>` | Hilos de OpenMP | máximo del sistema |
@@ -83,6 +85,28 @@ que adivinar.
 | `--no-render` | Modo headless | off |
 | `--csv` | Salida en CSV para graficar | off |
 | `--help` | Ayuda | |
+
+### Deriva de color
+
+Las semillas que ya están sobre la esfera no se quedan con el color con el que
+nacieron: su **tono recorre el círculo HSV** con el tiempo, cada una a su propio
+ritmo (`--color-spread`), y la saturación late hacia arriba — nunca hacia el gris —
+así la esfera se ve **más saturada** y se va poblando de tonos distintos en vez de
+cambiar en bloque como un filtro encima.
+
+```bash
+./bin/screensaver_seq                       # deriva suave (una vuelta cada ~17 s)
+./bin/screensaver_seq --color-speed 0.4     # notoria, buena para la demo
+./bin/screensaver_seq --color-speed 0       # el comportamiento anterior: color fijo
+./bin/screensaver_seq --color-spread 0      # todas al mismo ritmo: la paleta gira entera
+```
+
+El color **no se guarda ni se acumula**: se recalcula cada frame como una función pura
+`color(i, seed, t)`, igual que `color_for_seed()`. Eso es deliberado — mantiene el
+render sin estado compartido entre frames, así que el `parallel for` de la fase OpenMP
+sigue produciendo el mismo framebuffer bit a bit que el secuencial en el mismo instante
+`t`. El costo es O(N) por frame contra el O(P·N) del kernel de Voronoi: medido, queda
+dentro del ruido.
 
 ### Teclas
 

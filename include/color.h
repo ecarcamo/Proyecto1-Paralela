@@ -78,4 +78,44 @@ void color_hsv_to_rgb(float h, float s, float v, float *r, float *g, float *b);
  * ------------------------------------------------------------------------- */
 uint32_t color_for_seed(uint32_t index, uint64_t seed);
 
+/* ---------------------------------------------------------------------------
+ *  ColorAnim - la deriva de color de las semillas que YA estan en la esfera.
+ *
+ *  El color no se vuelve a sortear ni se guarda de un frame al siguiente: se
+ *  RECALCULA como una funcion del tiempo. Eso mantiene la propiedad que hace
+ *  util a color_for_seed() -- pura, sin estado, misma salida en cualquier
+ *  orden -- y por lo tanto la version paralela sigue produciendo el mismo
+ *  framebuffer bit a bit que la secuencial en el mismo instante t.
+ *
+ *    speed   vueltas COMPLETAS del circulo de tono por segundo. 0 congela el
+ *            color (comportamiento anterior). 0.06 = una vuelta cada ~17 s,
+ *            que es lento como para leerse como una transicion y no como un
+ *            parpadeo.
+ *    spread  cuanto varia ese ritmo ENTRE semillas, en [0,1]. Con 0 todas
+ *            recorren el circulo a la vez y la esfera entera cambia de tono
+ *            en bloque, que se ve como un filtro encima. Con spread > 0 cada
+ *            semilla lleva su propio ritmo, se desfasan solas y la esfera se
+ *            va poblando de tonos distintos: es lo que la satura.
+ * ------------------------------------------------------------------------- */
+typedef struct {
+    float speed;
+    float spread;
+} ColorAnim;
+
+/* ---------------------------------------------------------------------------
+ *  El color de la semilla i en el instante t (segundos). Igual de pura que
+ *  color_for_seed(): depende solo de (index, seed, anim, t).
+ *
+ *  't' es double y no float a proposito. El tono acumulado es speed*t y crece
+ *  sin tope mientras el programa corre; en float, a la media hora t ya vale
+ *  ~1e3 y la parte fraccionaria -- que es justo la que da el tono -- se queda
+ *  sin bits y el color avanza a saltos visibles. El envolvimiento a [0,1) se
+ *  hace en double y recien despues se baja a float.
+ *
+ *  Con anim == NULL o anim->speed == 0 devuelve exactamente lo mismo que
+ *  color_for_seed(index, seed).
+ * ------------------------------------------------------------------------- */
+uint32_t color_for_seed_at(uint32_t index, uint64_t seed,
+                           const ColorAnim *anim, double t);
+
 #endif /* COLOR_H */

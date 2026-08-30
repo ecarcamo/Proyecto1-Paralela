@@ -57,6 +57,24 @@
 #define SS_DEF_BENCH_WARMUP 10       /* frames descartados por calentamiento  */
 
 /* --------------------------------------------------------------------------
+ *  Deriva de color de las semillas ya colocadas (ColorAnim en color.h).
+ *
+ *  El default NO es 0: con el color congelado la esfera queda con la misma
+ *  paleta desde el primer frame hasta el ultimo. A 0.06 vueltas/s cada semilla
+ *  tarda ~17 s en dar la vuelta completa al circulo de tono -- lento como para
+ *  leerse como una transicion y no como un parpadeo -- y con el spread cada
+ *  una lo hace a su propio ritmo, asi que la esfera se va poblando de tonos
+ *  distintos en vez de cambiar en bloque.
+ *
+ *  El tope de velocidad es de seguridad, no de rendimiento: por arriba de una
+ *  vuelta por segundo esto deja de ser una transicion gradual y pasa a ser un
+ *  estroboscopio de N colores.
+ * -------------------------------------------------------------------------- */
+#define SS_DEF_COLOR_SPEED  0.06     /* vueltas del circulo de tono por segundo */
+#define SS_DEF_COLOR_SPREAD 0.65     /* dispersion del ritmo entre semillas, 0..1 */
+#define SS_COLOR_SPEED_MAX  2.0      /* tope defendible en |vueltas/s|         */
+
+/* --------------------------------------------------------------------------
  *  Fisica: repulsion de Coulomb con softening + Velocity-Verlet.
  *  Ver docs/01-FUNDAMENTO-MATEMATICO.md seccion 5. No son argumentos de CLI
  *  (el enunciado no lo pide para esto): se calibraron a ojo para que el
@@ -87,6 +105,10 @@ typedef struct {
     double   rot_speed;     /* --rot      velocidad de giro, rad/s           */
     double   sphere_frac;   /* --fill     fraccion de pantalla que ocupa     */
     uint64_t seed;          /* --seed     semilla del PRNG (determinismo)    */
+
+    /* --- deriva de color de las semillas ya colocadas ------------------ */
+    double   color_speed;   /* --color-speed  vueltas de tono por segundo    */
+    double   color_spread;  /* --color-spread dispersion del ritmo, 0..1     */
 
     /* --- que kernels se activan --------------------------------------- */
     int      physics;       /* --physics  0|1  repulsion Douady-Couder       */

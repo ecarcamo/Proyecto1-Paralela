@@ -165,6 +165,40 @@ Vec3 camera_ray(const Camera *cam, int i, int j, int w, int h)
  * Ver el calculo en render_points. */
 #define BALL_FILL      1.60f
 
+/* ==========================================================================
+ *  frame_colors - el color de las N semillas EN ESTE INSTANTE.
+ *
+ *  La deriva de color NO se guarda en s->color[]: se recalcula cada frame a
+ *  partir de (indice, seed, t) con color_for_seed_at(). Guardarla seria mutar
+ *  el SeedSet desde el render -- que recibe 's' como const y no le pertenece --
+ *  y ademas volveria el color un estado ACUMULADO: dos hilos escribiendo el
+ *  mismo arreglo, y el color dependiendo de cuantos frames se hayan dibujado
+ *  en vez de solo del instante t. Recalcular lo mantiene puro: el frame del
+ *  segundo 12.5 sale identico se haya llegado a el en 30 o en 400 frames, y
+ *  la version paralela puede reproducirlo bit a bit.
+ *
+ *  El costo es O(N) por frame contra el O(P*N) del kernel de Voronoi, o sea
+ *  perdido en el ruido; y es un bucle sin dependencias, asi que cuando se
+ *  paralelice acepta un 'parallel for' directo.
+ *
+ *  Devuelve NULL cuando no hay nada que animar (--color-speed 0) o si falla el
+ *  malloc; en ambos casos el llamador cae de vuelta en s->color[], que es
+ *  exactamente el mismo color con t = 0.
+ * ========================================================================== */
+static uint32_t *frame_colors(const SeedSet *s, const Config *cfg, double t)
+{
+    if (cfg == NULL || cfg->color_speed == 0.0 || s->n < 1) return NULL;
+
+    uint32_t *c = (uint32_t *)malloc((size_t)s->n * sizeof(uint32_t));
+    if (c == NULL) return NULL;
+
+    ColorAnim anim = { (float)cfg->color_speed, (float)cfg->color_spread };
+    for (int i = 0; i < s->n; ++i)
+        c[i] = color_for_seed_at((uint32_t)i, cfg->seed, &anim, t);
+
+    return c;
+}
+
 static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float rf,
                       float depth, float r_world, uint32_t color, float k_world)
 {
@@ -261,6 +295,11 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
     const size_t npx = (size_t)w * (size_t)h;
     for (size_t i = 0; i < npx; ++i) zbuf[i] = INFINITY;
 
+    /* Colores de ESTE instante. Si la deriva esta apagada (o falla el malloc)
+     * se usan los fijos del SeedSet. */
+    uint32_t       *anim_col = frame_colors(s, cfg, t);
+    const uint32_t *col      = (anim_col != NULL) ? anim_col : s->color;
+
     Camera cam = camera_make(cfg);
     const float aspect = (float)w / (float)h;
     const float cam_dist = v3_len(cam.origin);   /* la camara mira al origen */
@@ -330,9 +369,10 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
          * sphere_px pixeles equivalen a 1 radio de la esfera grande. */
         float r_world = radius / sphere_px;
 
-        draw_ball(fb, zbuf, sx, sy_px, rf, cz, r_world, s->color[idx], k);
+        draw_ball(fb, zbuf, sx, sy_px, rf, cz, r_world, col[idx], k);
     }
 
+    free(anim_col);
     free(zbuf);
 }
 
@@ -378,6 +418,11 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
         free(rx); free(ry); free(rz);
         return;                                        /* sin memoria, no crash */
     }
+
+    /* Colores de ESTE instante, una vez por frame y NO por pixel: el bucle
+     * caliente solo indexa col[winner], igual que antes indexaba s->color. */
+    uint32_t       *anim_col = frame_colors(s, cfg, t);
+    const uint32_t *col      = (anim_col != NULL) ? anim_col : s->color;
 
     const float ang  = (float)(t * ((cfg != NULL) ? cfg->rot_speed : SS_DEF_ROT_SPEED));
     const float sy   = sinf(ang),  cyv = cosf(ang);
@@ -430,7 +475,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
             float lambert = v3_dot(nrm, light);
             if (lambert < 0.0f) lambert = 0.0f;
             float k_shade = 0.28f + 0.72f * lambert;
-            uint32_t base = rgb_mul(s->color[winner], k_shade);
+            uint32_t base = rgb_mul(col[winner], k_shade);
 
             /* Borde de celda: best1-best2 es chico exactamente en la
              * frontera entre dos celdas, asi que un smoothstep sobre esa
@@ -440,6 +485,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
         }
     }
 
+    free(anim_col);
     free(rx); free(ry); free(rz);
 }
 

@@ -150,6 +150,10 @@ void args_usage(const char *prog)
 "  --fill FRAC      fraccion de pantalla (0,1]       (def %.2f)\n"
 "  --seed S         semilla del PRNG de colores       (def %llu)\n"
 "\n"
+"Deriva de color (las semillas ya colocadas cambian de tono con el tiempo):\n"
+"  --color-speed V  vueltas de tono por segundo       (def %.2f, 0 = fijo)\n"
+"  --color-spread F dispersion del ritmo entre semillas 0..1 (def %.2f)\n"
+"\n"
 "Kernels:\n"
 "  --physics 0|1    repulsion Douady-Couder          (def 0)\n"
 "  --voronoi 0|1    celdas (1) o bolitas (0)          (def 0)\n"
@@ -169,7 +173,9 @@ void args_usage(const char *prog)
         SS_DEF_HEIGHT, SS_HEIGHT_MIN,
         SS_DEF_ROT_SPEED,
         SS_DEF_FILL,
-        (unsigned long long)SS_DEF_SEED);
+        (unsigned long long)SS_DEF_SEED,
+        SS_DEF_COLOR_SPEED,
+        SS_DEF_COLOR_SPREAD);
 }
 
 ArgsStatus args_parse(int argc, char **argv, Config *cfg)
@@ -240,6 +246,19 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             double v;
             if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
             cfg->sphere_frac = v;
+        }
+
+        else if (strcmp(a, "--color-speed") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->color_speed = v;
+        }
+        else if (strcmp(a, "--color-spread") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->color_spread = v;
         }
 
         /* --- sin signo de 64 bits --------------------------------------- */

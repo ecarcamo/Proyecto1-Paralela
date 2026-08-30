@@ -11,6 +11,7 @@
  * =========================================================================== */
 #include "config.h"
 
+#include <math.h>
 #include <stdio.h>
 
 Config config_defaults(void)
@@ -25,6 +26,9 @@ Config config_defaults(void)
     cfg.rot_speed    = SS_DEF_ROT_SPEED;
     cfg.sphere_frac  = SS_DEF_FILL;
     cfg.seed         = SS_DEF_SEED;
+
+    cfg.color_speed  = SS_DEF_COLOR_SPEED;
+    cfg.color_spread = SS_DEF_COLOR_SPREAD;
 
     /* Apagada por defecto: con la fisica encendida las semillas se relajan y
      * el patron aureo se convierte en un panal, o sea se deja de ver la esfera
@@ -89,6 +93,26 @@ int config_validate(const Config *cfg)
         return -6;
     }
 
+    /* --- Deriva de color ----------------------------------------------
+     * El signo se permite (invierte el sentido del recorrido del tono); lo que
+     * se acota es la MAGNITUD: mas de SS_COLOR_SPEED_MAX vueltas por segundo
+     * ya no es una transicion gradual sino un parpadeo de colores saturados a
+     * pantalla completa, que ademas de verse mal es un riesgo real para gente
+     * fotosensible. */
+    if (!(fabs(cfg->color_speed) <= SS_COLOR_SPEED_MAX)) {
+        fprintf(stderr,
+                "error: --color-speed debe estar en [-%.1f, %.1f] vueltas/s\n"
+                "       (se recibio %.3f). Usa 0 para dejar el color fijo.\n",
+                SS_COLOR_SPEED_MAX, SS_COLOR_SPEED_MAX, cfg->color_speed);
+        return -8;
+    }
+    if (!(cfg->color_spread >= 0.0 && cfg->color_spread <= 1.0)) {
+        fprintf(stderr,
+                "error: --color-spread debe estar en [0, 1] (se recibio %.3f)\n",
+                cfg->color_spread);
+        return -9;
+    }
+
     if (cfg->bench_frames < 0) {
         fprintf(stderr, "error: --bench debe ser >= 0\n");
         return -7;
@@ -122,6 +146,11 @@ void config_print(const Config *cfg)
     if (cfg->angle_rad == SS_GOLDEN_ANG) printf("  (angulo aureo)");
     printf("\n");
     printf("  velocidad de giro : %.3f rad/s\n", cfg->rot_speed);
+    if (cfg->color_speed != 0.0)
+        printf("  deriva de color   : %.3f vueltas/s  (dispersion %.2f)\n",
+               cfg->color_speed, cfg->color_spread);
+    else
+        printf("  deriva de color   : apagada (color fijo)\n");
     printf("  semilla PRNG      : %llu\n",       (unsigned long long)cfg->seed);
     printf("  fisica            : %s\n",         cfg->physics ? "si" : "no");
     printf("  voronoi           : %s\n",         cfg->voronoi ? "celdas" : "bolitas");
