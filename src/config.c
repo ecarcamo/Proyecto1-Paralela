@@ -47,6 +47,12 @@ Config config_defaults(void)
      * comentario largo de render_balls_raycast(). */
     cfg.raster       = 0;
 
+    /* Apagado por defecto: es una demo aparte, se enciende con --cannon 1. */
+    cfg.cannon       = 0;
+    cfg.fire_rate    = SS_DEF_FIRE_RATE;
+    cfg.muzzle_speed = SS_DEF_MUZZLE_SPEED;
+    cfg.trail        = SS_DEF_TRAIL;
+
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
     cfg.csv          = 0;
@@ -124,6 +130,35 @@ int config_validate(const Config *cfg)
         return -7;
     }
 
+    /* --- Modo canon ------------------------------------------------------
+     * --physics asume que las semillas ya estan sobre la esfera para poder
+     * repelerse; una bolita a mitad de vuelo no tiene esa geometria. En vez
+     * de aplicar la fisica solo a las aterrizadas (que cambiaria el
+     * significado de la demo de Douady-Couder), se rechaza la combinacion
+     * de entrada: mas simple, mas explicito, sin sorpresas. */
+    if (cfg->cannon && cfg->physics) {
+        fprintf(stderr,
+                "error: --cannon y --physics no se pueden usar juntos: la\n"
+                "       repulsion asume que las semillas ya estan sobre la\n"
+                "       esfera, y en pleno vuelo no lo estan.\n");
+        return -10;
+    }
+    if (cfg->cannon && !(cfg->fire_rate > 0.0)) {
+        fprintf(stderr, "error: --fire-rate debe ser > 0 (se recibio %.3f)\n",
+                cfg->fire_rate);
+        return -11;
+    }
+    if (cfg->cannon && !(cfg->muzzle_speed > 0.0)) {
+        fprintf(stderr, "error: --muzzle-speed debe ser > 0 (se recibio %.3f)\n",
+                cfg->muzzle_speed);
+        return -12;
+    }
+    if (cfg->cannon && cfg->trail < 0) {
+        fprintf(stderr, "error: --trail debe ser >= 0 (se recibio %d)\n",
+                cfg->trail);
+        return -13;
+    }
+
     /* --- Advertencias: no abortan, es decision del usuario ------------- */
     if (cfg->bench_frames > 0 && cfg->vsync) {
         fprintf(stderr,
@@ -163,6 +198,9 @@ void config_print(const Config *cfg)
            cfg->voronoi ? "celdas de Voronoi (raycasting, O(P*N))"
                         : (cfg->raster ? "bolitas rasterizadas (plan B, ~O(1) en N)"
                                        : "bolitas por raycasting (O(P*N))"));
+    if (cfg->cannon)
+        printf("  canon             : encendido (fire-rate=%.1f/s  muzzle-speed=%.2f  trail=%d)\n",
+               cfg->fire_rate, cfg->muzzle_speed, cfg->trail);
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);

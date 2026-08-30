@@ -14,6 +14,7 @@
 #include <math.h>
 
 #include "physics.h"
+#include "sphere.h"
 #include "timing.h"
 
 static int cmp_double(const void *a, const void *b)
@@ -44,9 +45,23 @@ BenchStats bench_run(Framebuffer *fb, SeedSet *s, const Config *cfg)
     const double dt_phys = (1.0 / 60.0 < physics_max_dt(s->n))
                          ? 1.0 / 60.0 : physics_max_dt(s->n);
 
-    double t   = 0.0;
+    /* Con --cannon 1 la esfera se construye con el tiempo: medir desde t=0
+     * mide una esfera llenandose, y el costo por frame crece muestra a
+     * muestra en vez de ser estable -- media, mediana y sd dejarian de
+     * describir nada. Se arranca en el instante en que la ultima bolita ya
+     * aterrizo (n/fire_rate + 1/muzzle_speed), asi el bench mide el costo en
+     * regimen permanente, con la esfera completa, igual que sin canon. */
+    double t = cfg->cannon
+        ? (double)cfg->n / cfg->fire_rate + 1.0 / cfg->muzzle_speed
+        : 0.0;
+
     int    idx = 0;
     for (int f = 0; f < total; ++f) {
+        if (cfg->cannon) {
+            sphere_fill_cannon(s, cfg->n, cfg->angle_rad, cfg->seed,
+                               cfg->fire_rate, cfg->muzzle_speed, cfg->trail, t);
+        }
+
         double a = now_seconds();
         render_frame(fb, s, cfg, t);
         if (cfg->physics) physics_step(s, &pp, dt_phys);

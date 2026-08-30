@@ -89,6 +89,15 @@
  * Ver la tabla medida en include/physics.h (physics_max_dt). */
 #define SS_PHYS_DT_SAFETY    0.35
 
+/* --------------------------------------------------------------------------
+ *  Modo canon: la esfera arranca vacia y un canon en el centro dispara las
+ *  semillas hacia afuera hasta que aterrizan en su posicion de Fibonacci.
+ *  Ver sphere_fill_cannon() en sphere.h para la formula cerrada.
+ * -------------------------------------------------------------------------- */
+#define SS_DEF_FIRE_RATE     60.0    /* disparos por segundo                  */
+#define SS_DEF_MUZZLE_SPEED  1.5     /* radios por segundo; el vuelo dura 1/V */
+#define SS_DEF_TRAIL         6       /* fantasmas de estela por bolita en vuelo */
+
 /* ==========================================================================
  *  Config - una sola estructura para todo el programa.
  * ========================================================================== */
@@ -114,6 +123,12 @@ typedef struct {
     int      physics;       /* --physics  0|1  repulsion Douady-Couder       */
     int      voronoi;       /* --voronoi  0|1  celdas (1) o bolitas (0)      */
     int      raster;        /* --raster   0|1  bolitas rasterizadas (plan B) */
+
+    /* --- modo canon: la esfera se construye a canonazos ---------------- */
+    int      cannon;        /* --cannon      0|1  enciende el modo canon     */
+    double   fire_rate;     /* --fire-rate   disparos por segundo            */
+    double   muzzle_speed;  /* --muzzle-speed radios por segundo             */
+    int      trail;         /* --trail       fantasmas de estela por bolita  */
 
     /* --- modo medicion ------------------------------------------------ */
     int      bench_frames;  /* --bench K  0 = modo ventana normal            */

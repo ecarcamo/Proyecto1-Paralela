@@ -240,6 +240,102 @@ static void estimar_n_critico(SeedSet *s)
     printf("  ------------------------------------------------------------\n");
 }
 
+/* ===========================================================================
+ *  Test 7 - Modo canon: convergencia, pureza, dominio y conteo.
+ *
+ *  Verifica la propiedad central del modo --cannon: la posicion es una
+ *  formula cerrada de t, sin ningun estado que integrar (docs del artifact
+ *  "Cañones sobre Fibonacci", Plan 1).
+ * =========================================================================== */
+static void test_cannon(void)
+{
+    const int n = 40;
+    const double R = 60.0, V = 1.5;
+    const int L = 6;
+
+    int cap = sphere_cannon_capacity(n, R, V, L);
+    SeedSet s;
+    if (seedset_alloc(&s, cap) != 0) {
+        check("Modo canon: reserva de memoria", 0, "seedset_alloc fallo");
+        return;
+    }
+
+    /* --- 7a. Convergencia: con t suficiente, IDENTICO a sphere_fill_fibonacci */
+    double t_full = (double)n / R + 1.0 / V;
+    sphere_fill_cannon(&s, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, t_full + 1.0);
+
+    SeedSet ref;
+    if (seedset_alloc(&ref, n) == 0) {
+        sphere_fill_fibonacci(&ref, n, SS_GOLDEN_ANG, SS_DEF_SEED);
+
+        double peor = 0.0;
+        for (int i = 0; i < n && i < s.n; i++) {
+            double dx = (double)s.x[i] - ref.x[i];
+            double dy = (double)s.y[i] - ref.y[i];
+            double dz = (double)s.z[i] - ref.z[i];
+            double e = sqrt(dx*dx + dy*dy + dz*dz);
+            if (e > peor) peor = e;
+        }
+        char msg[128];
+        snprintf(msg, sizeof msg, "s->n=%d (esperado %d), error max %.2e", s.n, n, peor);
+        check("Convergencia: canon lleno == sphere_fill_fibonacci",
+              s.n == n && peor < 1e-6, msg);
+        seedset_free(&ref);
+    }
+
+    /* --- 7b. Pureza: mismo t, dos veces, resultado bit a bit identico ---- */
+    SeedSet a, b;
+    int igual = 0;
+    if (seedset_alloc(&a, cap) == 0 && seedset_alloc(&b, cap) == 0) {
+        sphere_fill_cannon(&a, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, 1.2345);
+        sphere_fill_cannon(&b, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, 1.2345);
+        igual = (a.n == b.n);
+        for (int i = 0; igual && i < a.n; i++) {
+            if (a.x[i] != b.x[i] || a.y[i] != b.y[i] || a.z[i] != b.z[i] ||
+                a.color[i] != b.color[i])
+                igual = 0;
+        }
+        char msg[64];
+        snprintf(msg, sizeof msg, "a.n=%d b.n=%d", a.n, b.n);
+        check("Pureza: mismo t produce el mismo resultado bit a bit", igual, msg);
+        seedset_free(&a);
+        seedset_free(&b);
+    }
+
+    /* --- 7c. Dominio: el radio de la primera semilla es monotono y en [0,1] */
+    double r_prev = -1.0;
+    int monotono = 1, en_rango = 1;
+    for (double tt = 0.0; tt <= 1.0 / V + 0.05; tt += 0.02) {
+        sphere_fill_cannon(&s, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, tt);
+        if (s.n < 1) continue;                     /* semilla 0 aun no disparo */
+        double r = sqrt((double)s.x[0]*s.x[0] + (double)s.y[0]*s.y[0] + (double)s.z[0]*s.z[0]);
+        if (r < -1e-4 || r > 1.0 + 1e-4) en_rango = 0;
+        if (r < r_prev - 1e-4) monotono = 0;        /* tolerancia al ruido de float */
+        r_prev = r;
+    }
+    check("Dominio: el radio de la semilla 0 es monotono creciente en [0,1]",
+          monotono && en_rango, monotono ? "en rango" : "salio de [0,1] o no es monotono");
+
+    /* --- 7d. Conteo: vivas(t) arranca en 1, satura en n, nunca pasa capacity */
+    sphere_fill_cannon(&s, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, 0.0);
+    int arranca_en_1 = (s.n >= 1);
+
+    int nunca_excede = 1, satura_en_n = 0;
+    for (double tt = 0.0; tt < t_full + 1.0; tt += 0.005) {
+        sphere_fill_cannon(&s, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, tt);
+        if (s.n > cap) nunca_excede = 0;
+    }
+    sphere_fill_cannon(&s, n, SS_GOLDEN_ANG, SS_DEF_SEED, R, V, L, t_full + 1.0);
+    satura_en_n = (s.n == n);
+
+    char msg[96];
+    snprintf(msg, sizeof msg, "arranca=%d  satura_en_n=%d  cap=%d", arranca_en_1, satura_en_n, cap);
+    check("Conteo: vivas(t) arranca en 1, satura en n, nunca excede capacity",
+          arranca_en_1 && satura_en_n && nunca_excede, msg);
+
+    seedset_free(&s);
+}
+
 /* =========================================================================== */
 
 int main(int argc, char **argv)
@@ -285,6 +381,9 @@ int main(int argc, char **argv)
 
     printf("\n 6. Costo computacional\n");
     estimar_n_critico(&s);
+
+    printf("\n 7. Modo canon\n");
+    test_cannon();
 
     seedset_free(&s);
 

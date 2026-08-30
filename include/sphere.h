@@ -64,6 +64,23 @@ int  seedset_alloc(SeedSet *s, int capacity);
 void seedset_free(SeedSet *s);
 
 /* ---------------------------------------------------------------------------
+ *  sphere_dir_fib - la posicion i-esima del patron de Fibonacci, sola.
+ *
+ *  Es el nucleo matematico de sphere_fill_fibonacci(), extraido para que
+ *  cualquier otra rutina que necesite "donde va la semilla i" (el cañon del
+ *  modo --cannon, por ejemplo) lo calcule llamando a esto y no copiando la
+ *  formula. Dos copias del angulo aureo tarde o temprano se desincronizan.
+ *
+ *    i          indice de la semilla, 0..n-1
+ *    n          numero total de semillas (para el reparto de areas)
+ *    angle_rad  angulo de divergencia en RADIANES
+ *
+ *  Devuelve un punto sobre la esfera UNITARIA (|p| = 1 exacto, salvo error
+ *  de redondeo de float).
+ * ------------------------------------------------------------------------- */
+Vec3 sphere_dir_fib(int i, int n, double angle_rad);
+
+/* ---------------------------------------------------------------------------
  *  Genera la esfera de Fibonacci.
  *
  *    s          conjunto ya reservado con capacity >= n
@@ -78,6 +95,54 @@ void seedset_free(SeedSet *s);
  *  patron se degrada de forma visible.
  * ------------------------------------------------------------------------- */
 void sphere_fill_fibonacci(SeedSet *s, int n, double angle_rad, uint64_t seed);
+
+/* ---------------------------------------------------------------------------
+ *  Cuantas semillas hay que reservar para el modo canon: las n aterrizadas
+ *  mas los fantasmas de estela de las que estan en pleno vuelo.
+ *
+ *  en_vuelo = techo(fire_rate / muzzle_speed)   -- el vuelo dura 1/muzzle_speed
+ *             segundos, y en ese tiempo se disparan fire_rate/muzzle_speed
+ *             bolitas nuevas que still no aterrizaron.
+ *  capacity = n + en_vuelo * trail
+ *
+ *  Se calcula ANTES de seedset_alloc(): esa funcion reparte diez punteros en
+ *  un solo malloc y no hay camino de crecimiento despues.
+ *
+ *  Devuelve al menos n (si trail es 0 o los parametros son degenerados, no
+ *  reserva de menos).
+ * ------------------------------------------------------------------------- */
+int sphere_cannon_capacity(int n, double fire_rate, double muzzle_speed, int trail);
+
+/* ---------------------------------------------------------------------------
+ *  sphere_fill_cannon - la esfera de Fibonacci, construyendose a canonazos.
+ *
+ *  Reescribe el SoA para el instante 't': cada semilla i sale disparada en
+ *  t_disparo(i) = i/fire_rate y viaja en linea recta desde el centro hasta su
+ *  posicion definitiva de Fibonacci (sphere_dir_fib), tardando 1/muzzle_speed
+ *  segundos. Detras de cada bolita en vuelo se dibujan 'trail' fantasmas: el
+ *  fantasma j es la MISMA formula evaluada en (t - j*delta), asi que la
+ *  estela sigue siendo forma cerrada, sin ningun estado que integrar.
+ *
+ *  TODO sale de una funcion pura de (i, t): dos llamadas con el mismo t dan
+ *  el mismo resultado bit a bit, sin importar cuantos frames se dibujaron
+ *  antes. Es la propiedad que permite comparar el framebuffer secuencial
+ *  contra el paralelo en el mismo instante.
+ *
+ *    s             conjunto ya reservado con capacity >= sphere_cannon_capacity(...)
+ *    n             semillas del patron (el parametro N del enunciado)
+ *    angle_rad     angulo de divergencia, en radianes
+ *    seed          semilla del PRNG para los colores
+ *    fire_rate     disparos por segundo (> 0)
+ *    muzzle_speed  radios por segundo; el vuelo de una bolita dura 1/muzzle_speed (> 0)
+ *    trail         fantasmas de estela por bolita en vuelo (>= 0)
+ *    t             tiempo de la animacion, en segundos (t <= 0 => esfera vacia)
+ *
+ *  Deja s->n en (vivas + fantasmas dibujados este instante) y escribe
+ *  vx/vy/vz/ax/ay/az en cero: el modo canon es incompatible con --physics
+ *  (config_validate lo exige), pero el SoA no debe quedar con basura.
+ * ------------------------------------------------------------------------- */
+void sphere_fill_cannon(SeedSet *s, int n, double angle_rad, uint64_t seed,
+                        double fire_rate, double muzzle_speed, int trail, double t);
 
 /* Devuelve la semilla i como Vec3. */
 static inline Vec3 seed_pos(const SeedSet *s, int i)
@@ -96,6 +161,13 @@ static inline Vec3 seed_pos(const SeedSet *s, int i)
  *  las semillas se empujen y phi aparecio.
  *
  *  Devuelve el angulo en GRADOS.
+ *
+ *  NO filtra bolitas en vuelo ni fantasmas de estela: recorre s->n de punta a
+ *  punta asumiendo que todas estan sobre la esfera. Eso esta bien porque el
+ *  unico llamador (main.c) solo la invoca si cfg->physics esta activo, y
+ *  config_validate() ya rechaza --cannon junto con --physics -- las dos
+ *  situaciones nunca coinciden. Si algun dia se llega a llamar con --cannon,
+ *  hay que filtrar por radio antes (ver rr[] en render.c).
  * ------------------------------------------------------------------------- */
 double sphere_mean_divergence_deg(const SeedSet *s);
 

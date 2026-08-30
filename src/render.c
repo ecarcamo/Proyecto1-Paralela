@@ -403,8 +403,12 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
  *  s->ax/ay/az, que son el estado persistente de la fisica (physics.c) --
  *  pisarlos aca romperia la integracion de Verlet entre frames.
  * ========================================================================== */
+/* 'rr' es opcional (puede ser NULL): solo hace falta cuando alguna semilla
+ * puede NO estar sobre la esfera unitaria (modo --cannon, bolitas en pleno
+ * vuelo). Cuando es NULL no se calcula nada extra -- el resto de los modos
+ * no pagan este costo si nunca lo necesitan. */
 static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float ctx,
-                         float *rx, float *ry, float *rz)
+                         float *rx, float *ry, float *rz, float *rr)
 {
     for (int i = 0; i < s->n; ++i) {
         Vec3 p = seed_pos(s, i);
@@ -413,6 +417,7 @@ static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float
         rx[i] = p.x;
         ry[i] = p.y;
         rz[i] = p.z;
+        if (rr != NULL) rr[i] = v3_len2(p);
     }
 }
 
@@ -430,8 +435,9 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
     float *rx = (float *)malloc((size_t)s->n * sizeof(float));
     float *ry = (float *)malloc((size_t)s->n * sizeof(float));
     float *rz = (float *)malloc((size_t)s->n * sizeof(float));
-    if (rx == NULL || ry == NULL || rz == NULL) {
-        free(rx); free(ry); free(rz);
+    float *rr = (float *)malloc((size_t)s->n * sizeof(float));
+    if (rx == NULL || ry == NULL || rz == NULL || rr == NULL) {
+        free(rx); free(ry); free(rz); free(rr);
         return;                                        /* sin memoria, no crash */
     }
 
@@ -444,7 +450,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
     const float sy   = sinf(ang),  cyv = cosf(ang);
     const float tilt = 0.42f;                 /* mismo encuadre que render_points */
     const float stx  = sinf(tilt), ctx = cosf(tilt);
-    rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz);
+    rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz, rr);
 
     Camera cam = camera_make(cfg);
     const Vec3 center = v3(0.0f, 0.0f, 0.0f);
@@ -477,13 +483,26 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
             /* --- Voronoi esferico: el bucle interno, O(N) ------------------
              * Se maximiza el producto punto en vez de minimizar la distancia
              * geodesica (que pediria acos): son equivalentes porque acos es
-             * monotona decreciente, y evitamos un acos por semilla por pixel. */
+             * monotona decreciente, y evitamos un acos por semilla por pixel.
+             *
+             * En modo --cannon, una bolita en pleno vuelo (o un fantasma de
+             * estela) no esta sobre la esfera unitaria y no le corresponde
+             * ninguna celda: se descarta con rr[k], que ya se calculo en
+             * rotate_seeds sin costo extra de lectura. La tolerancia es floja
+             * a proposito -- solo hace falta distinguir "aterrizada" (rr=1)
+             * de "en vuelo" (rr<1), no medir con precision. */
             float best1 = -2.0f, best2 = -2.0f;
             int   winner = 0;
+            int   hay_ganador = 0;
             for (int k = 0; k < s->n; ++k) {
+                if (rr[k] < 0.999f) continue;          /* no aterrizada, sin celda */
                 float dot = nrm.x * rx[k] + nrm.y * ry[k] + nrm.z * rz[k];
-                if      (dot > best1) { best2 = best1; best1 = dot; winner = k; }
+                if      (dot > best1) { best2 = best1; best1 = dot; winner = k; hay_ganador = 1; }
                 else if (dot > best2) { best2 = dot; }
+            }
+            if (!hay_ganador) {                         /* nadie aterrizo todavia */
+                fb->px[j * w + i] = RENDER_BG;
+                continue;
             }
 
             /* Sombreado: Lambert difuso + piso ambiente, mismas constantes
@@ -502,7 +521,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
     }
 
     free(anim_col);
-    free(rx); free(ry); free(rz);
+    free(rx); free(ry); free(rz); free(rr);
 }
 
 /* ==========================================================================
@@ -527,17 +546,23 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
  *  pixel en vez de aproximada con profundidad por pixel.
  *
  *  ---- el test rayo-esfera, barato ----------------------------------------
- *  Un test generico cuesta ~16 flops por semilla. Aca sale en la mitad usando
- *  dos cosas que este problema regala: los centros estan sobre la esfera
- *  UNITARIA (|C| = 1) y la camara esta en el eje z, O = (0, 0, dist).
+ *  Un test generico cuesta ~16 flops por semilla. Aca sale mas barato usando
+ *  algo que este problema regala: la camara esta en el eje z, O = (0,0,dist).
  *
- *      |C - O|^2 = 1 - 2*dist*C.z + dist^2      <- un solo madd desde C.z
- *      b         = (C - O).d = C.d - dist*d.z   <- el producto punto de siempre
- *      perp^2    = |C - O|^2 - b^2              <- distancia rayo-centro
+ *      |C - O|^2 = |C|^2 - 2*dist*C.z + dist^2   <- un solo madd desde C.z
+ *      b         = (C - O).d = C.d - dist*d.z    <- el producto punto de siempre
+ *      perp^2    = |C - O|^2 - b^2               <- distancia rayo-centro
  *
  *  y pega si perp^2 < r^2. O sea: el mismo producto punto C.d que ya hace el
  *  Voronoi, mas tres operaciones. El sqrt aparece UNA vez por pixel (para la
  *  bolita ganadora), no una vez por semilla.
+ *
+ *  Nota sobre |C|^2: cuando TODAS las semillas estan sobre la esfera unitaria
+ *  (el caso de siempre, sin --cannon), |C|^2 = 1 y esto era una constante
+ *  compartida por todas. Con el modo canon una bolita en vuelo tiene |C| < 1,
+ *  asi que |C|^2 pasa a leerse del arreglo rr[] (llenado en rotate_seeds
+ *  junto con rx/ry/rz) en vez de ser una constante -- una carga y una resta
+ *  mas por semilla, ~10% segun lo medido en la Fase 3 del modo canon.
  * ========================================================================== */
 
 /* ---------------------------------------------------------------------------
@@ -587,8 +612,9 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     float *rx = (float *)malloc((size_t)s->n * sizeof(float));
     float *ry = (float *)malloc((size_t)s->n * sizeof(float));
     float *rz = (float *)malloc((size_t)s->n * sizeof(float));
-    if (rx == NULL || ry == NULL || rz == NULL) {
-        free(rx); free(ry); free(rz);
+    float *rr = (float *)malloc((size_t)s->n * sizeof(float));
+    if (rx == NULL || ry == NULL || rz == NULL || rr == NULL) {
+        free(rx); free(ry); free(rz); free(rr);
         return;                                        /* sin memoria, no crash */
     }
 
@@ -596,7 +622,7 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     const float sy   = sinf(ang),  cyv = cosf(ang);
     const float tilt = 0.42f;                 /* mismo encuadre que los otros modos */
     const float stx  = sinf(tilt), ctx = cosf(tilt);
-    rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz);
+    rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz, rr);
 
     uint32_t       *anim_col = frame_colors(s, cfg, t);
     const uint32_t *col      = (anim_col != NULL) ? anim_col : s->color;
@@ -604,7 +630,6 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     Camera      cam   = camera_make(cfg);
     const Vec3  light = v3_norm(v3(-0.4f, 0.6f, 0.7f));   /* la luz de siempre */
     const float dist  = cam.origin.z;                     /* O = (0, 0, dist)  */
-    const float oc_k  = 1.0f + dist * dist;               /* |C-O|^2 = oc_k - 2*dist*C.z */
 
     const float r  = ball_world_radius(s->n);
     const float r2 = r * r;
@@ -643,7 +668,11 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
                 float b = rx[k] * d.x + ry[k] * d.y + rz[k] * d.z - od;
                 if (b <= 0.0f) continue;                  /* bolita detras del ojo */
 
-                float perp2 = (oc_k - 2.0f * dist * rz[k]) - b * b;
+                /* |C-O|^2 = |C|^2 - 2*dist*C.z + dist^2, con |C|^2 = rr[k] en
+                 * vez de la constante 1 de antes: en modo --cannon una
+                 * bolita en pleno vuelo tiene |C| < 1, no esta sobre la
+                 * esfera unitaria. */
+                float perp2 = (rr[k] + dist * dist - 2.0f * dist * rz[k]) - b * b;
                 if (perp2 >= r2) continue;                /* el rayo pasa de largo */
 
                 float tt = b - sqrtf(r2 - perp2);         /* cara de adelante */
@@ -684,7 +713,7 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     }
 
     free(anim_col);
-    free(rx); free(ry); free(rz);
+    free(rx); free(ry); free(rz); free(rr);
 }
 
 /* ==========================================================================

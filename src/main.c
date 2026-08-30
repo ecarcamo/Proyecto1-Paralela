@@ -43,10 +43,33 @@
 /* --------------------------------------------------------------------------
  *  Rellena (o vuelve a llenar) la esfera con el angulo actual de la Config.
  *  Se usa al arrancar y cada vez que una tecla cambia el angulo.
+ *
+ *  Con --cannon 1 esto NO alcanza para animar la construccion: solo pinta el
+ *  instante t=0 (una sola bolita recien disparada). El bucle con ventana
+ *  llama a cannon_update() ademas de esto, en cada frame, para que la esfera
+ *  se siga construyendo con el tiempo.
  * -------------------------------------------------------------------------- */
 static void regen_sphere(SeedSet *seeds, const Config *cfg)
 {
-    sphere_fill_fibonacci(seeds, cfg->n, cfg->angle_rad, cfg->seed);
+    if (cfg->cannon) {
+        sphere_fill_cannon(seeds, cfg->n, cfg->angle_rad, cfg->seed,
+                           cfg->fire_rate, cfg->muzzle_speed, cfg->trail, 0.0);
+    } else {
+        sphere_fill_fibonacci(seeds, cfg->n, cfg->angle_rad, cfg->seed);
+    }
+}
+
+/* --------------------------------------------------------------------------
+ *  Reescribe el SoA para el instante 'sim_t' del modo canon. Se llama una vez
+ *  por frame, ANTES de render_frame(): la posicion es funcion pura de t, asi
+ *  que no hace falta ningun estado entre llamadas (ver sphere.h). No-op si
+ *  --cannon 0.
+ * -------------------------------------------------------------------------- */
+static void cannon_update(SeedSet *seeds, const Config *cfg, double sim_t)
+{
+    if (!cfg->cannon) return;
+    sphere_fill_cannon(seeds, cfg->n, cfg->angle_rad, cfg->seed,
+                       cfg->fire_rate, cfg->muzzle_speed, cfg->trail, sim_t);
 }
 
 /* ==========================================================================
@@ -59,8 +82,11 @@ static int run_headless(Config *cfg)
     Framebuffer fb    = {0};
     int rc = EXIT_FAILURE;
 
-    if (seedset_alloc(&seeds, cfg->n) != 0) {
-        fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cfg->n);
+    int cap = cfg->cannon
+        ? sphere_cannon_capacity(cfg->n, cfg->fire_rate, cfg->muzzle_speed, cfg->trail)
+        : cfg->n;
+    if (seedset_alloc(&seeds, cap) != 0) {
+        fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cap);
         goto cleanup;
     }
     if (fb_alloc(&fb, cfg->width, cfg->height) != 0) {
@@ -97,8 +123,11 @@ static int run_window(Config *cfg)
     int rc = EXIT_FAILURE;
 
     /* --- datos: semillas y framebuffer --------------------------------- */
-    if (seedset_alloc(&seeds, cfg->n) != 0) {
-        fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cfg->n);
+    int cap = cfg->cannon
+        ? sphere_cannon_capacity(cfg->n, cfg->fire_rate, cfg->muzzle_speed, cfg->trail)
+        : cfg->n;
+    if (seedset_alloc(&seeds, cap) != 0) {
+        fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cap);
         goto cleanup;
     }
     if (fb_alloc(&fb, cfg->width, cfg->height) != 0) {
@@ -201,6 +230,11 @@ static int run_window(Config *cfg)
                                   SS_DEF_PHYS_GAMMA, SS_DEF_PHYS_MASS };
             physics_step(&seeds, &pp, dt_phys);
         }
+
+        /* -- canon: reescribe el SoA para este instante, funcion pura de
+         *    sim_t (ver sphere.h). En pausa sim_t no avanza, asi que la
+         *    construccion se congela sola sin codigo extra aca. */
+        cannon_update(&seeds, cfg, sim_t);
 
         /* -- dibujo: render_frame se lleva el ~90% del tiempo ------------ */
         render_frame(&fb, &seeds, cfg, sim_t);

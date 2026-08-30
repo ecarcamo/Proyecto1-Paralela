@@ -159,6 +159,12 @@ void args_usage(const char *prog)
 "  --voronoi 0|1    celdas (1) o bolitas (0)          (def 0)\n"
 "  --raster 0|1     bolitas rasterizadas: plan B barato, NO escala con N\n"
 "\n"
+"Canon (la esfera se construye a canonazos; incompatible con --physics):\n"
+"  --cannon 0|1        enciende el modo canon             (def 0)\n"
+"  --fire-rate R       disparos por segundo               (def %.1f)\n"
+"  --muzzle-speed V    radios por segundo (vuelo dura 1/V) (def %.2f)\n"
+"  --trail L           fantasmas de estela por bolita      (def %d)\n"
+"\n"
 "Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"
 "  --no-render      corre sin abrir ventana (headless)\n"
@@ -176,7 +182,10 @@ void args_usage(const char *prog)
         SS_DEF_FILL,
         (unsigned long long)SS_DEF_SEED,
         SS_DEF_COLOR_SPEED,
-        SS_DEF_COLOR_SPREAD);
+        SS_DEF_COLOR_SPREAD,
+        SS_DEF_FIRE_RATE,
+        SS_DEF_MUZZLE_SPEED,
+        SS_DEF_TRAIL);
 }
 
 ArgsStatus args_parse(int argc, char **argv, Config *cfg)
@@ -228,6 +237,12 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
             cfg->bench_frames = (int)v;
         }
+        else if (strcmp(a, "--trail") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            long v;
+            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
+            cfg->trail = (int)v;
+        }
         /* --- reales ------------------------------------------------------ */
         else if (strcmp(a, "--angle") == 0) {
             /* El usuario piensa en grados (137.5); adentro todo va en radianes. */
@@ -261,6 +276,18 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
             cfg->color_spread = v;
         }
+        else if (strcmp(a, "--fire-rate") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->fire_rate = v;
+        }
+        else if (strcmp(a, "--muzzle-speed") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->muzzle_speed = v;
+        }
 
         /* --- sin signo de 64 bits --------------------------------------- */
         else if (strcmp(a, "--seed") == 0) {
@@ -279,6 +306,9 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
         }
         else if (strcmp(a, "--raster") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->raster) != 0) goto bad;
+        }
+        else if (strcmp(a, "--cannon") == 0) {
+            if (take_bool(argc, argv, &i, a, &cfg->cannon) != 0) goto bad;
         }
         else if (strcmp(a, "--vsync") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->vsync) != 0) goto bad;
