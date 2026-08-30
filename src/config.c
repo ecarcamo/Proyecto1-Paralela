@@ -11,6 +11,7 @@
  * =========================================================================== */
 #include "config.h"
 
+#include <math.h>
 #include <stdio.h>
 
 Config config_defaults(void)
@@ -26,10 +27,25 @@ Config config_defaults(void)
     cfg.sphere_frac  = SS_DEF_FILL;
     cfg.seed         = SS_DEF_SEED;
 
-    cfg.physics      = 1;
-    cfg.voronoi      = 1;
+    cfg.color_speed  = SS_DEF_COLOR_SPEED;
+    cfg.color_spread = SS_DEF_COLOR_SPREAD;
 
-    cfg.threads      = 0;               /* 0 = usar el maximo del sistema */
+    /* Apagada por defecto: con la fisica encendida las semillas se relajan y
+     * el patron aureo se convierte en un panal, o sea se deja de ver la esfera
+     * de Fibonacci que es el objeto del proyecto. Es una demo aparte, se
+     * enciende con --physics 1. */
+    cfg.physics      = 0;
+    /* Por defecto la esfera se dibuja con BOLITAS: es la figura de referencia
+     * del proyecto (esfera de Fibonacci con una esferita por semilla). El
+     * raycasting con celdas de Voronoi -- que es el kernel pesado a
+     * paralelizar -- sigue disponible con --voronoi 1. */
+    cfg.voronoi      = 0;
+    /* Las bolitas se resuelven por RAYCASTING, no rasterizando discos. El
+     * rasterizado sigue disponible con --raster 1, pero no es el baseline: su
+     * costo es casi constante en N (el area total pintada no depende de N) y
+     * no se paraleliza por semillas sin una carrera en el z-buffer. Ver el
+     * comentario largo de render_balls_raycast(). */
+    cfg.raster       = 0;
 
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
@@ -83,20 +99,32 @@ int config_validate(const Config *cfg)
         return -6;
     }
 
+    /* --- Deriva de color ----------------------------------------------
+     * El signo se permite (invierte el sentido del recorrido del tono); lo que
+     * se acota es la MAGNITUD: mas de SS_COLOR_SPEED_MAX vueltas por segundo
+     * ya no es una transicion gradual sino un parpadeo de colores saturados a
+     * pantalla completa, que ademas de verse mal es un riesgo real para gente
+     * fotosensible. */
+    if (!(fabs(cfg->color_speed) <= SS_COLOR_SPEED_MAX)) {
+        fprintf(stderr,
+                "error: --color-speed debe estar en [-%.1f, %.1f] vueltas/s\n"
+                "       (se recibio %.3f). Usa 0 para dejar el color fijo.\n",
+                SS_COLOR_SPEED_MAX, SS_COLOR_SPEED_MAX, cfg->color_speed);
+        return -8;
+    }
+    if (!(cfg->color_spread >= 0.0 && cfg->color_spread <= 1.0)) {
+        fprintf(stderr,
+                "error: --color-spread debe estar en [0, 1] (se recibio %.3f)\n",
+                cfg->color_spread);
+        return -9;
+    }
+
     if (cfg->bench_frames < 0) {
         fprintf(stderr, "error: --bench debe ser >= 0\n");
         return -7;
     }
 
     /* --- Advertencias: no abortan, es decision del usuario ------------- */
-    if (cfg->n > SS_N_WARN) {
-        fprintf(stderr,
-                "aviso: con N = %d la version secuencial va a correr muy por\n"
-                "       debajo de %.0f FPS. Es intencional si estas midiendo el\n"
-                "       punto de saturacion; usa el binario _omp si no.\n",
-                cfg->n, SS_FPS_TARGET);
-    }
-
     if (cfg->bench_frames > 0 && cfg->vsync) {
         fprintf(stderr,
                 "aviso: --bench con vsync activo mide el tope del monitor, no\n"
@@ -124,11 +152,17 @@ void config_print(const Config *cfg)
     if (cfg->angle_rad == SS_GOLDEN_ANG) printf("  (angulo aureo)");
     printf("\n");
     printf("  velocidad de giro : %.3f rad/s\n", cfg->rot_speed);
+    if (cfg->color_speed != 0.0)
+        printf("  deriva de color   : %.3f vueltas/s  (dispersion %.2f)\n",
+               cfg->color_speed, cfg->color_spread);
+    else
+        printf("  deriva de color   : apagada (color fijo)\n");
     printf("  semilla PRNG      : %llu\n",       (unsigned long long)cfg->seed);
     printf("  fisica            : %s\n",         cfg->physics ? "si" : "no");
-    printf("  voronoi           : %s\n",         cfg->voronoi ? "celdas" : "puntos");
-    if (cfg->threads > 0) printf("  hilos             : %d\n", cfg->threads);
-    else                  printf("  hilos             : maximo del sistema\n");
+    printf("  kernel            : %s\n",
+           cfg->voronoi ? "celdas de Voronoi (raycasting, O(P*N))"
+                        : (cfg->raster ? "bolitas rasterizadas (plan B, ~O(1) en N)"
+                                       : "bolitas por raycasting (O(P*N))"));
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);

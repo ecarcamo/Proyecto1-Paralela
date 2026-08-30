@@ -150,12 +150,16 @@ void args_usage(const char *prog)
 "  --fill FRAC      fraccion de pantalla (0,1]       (def %.2f)\n"
 "  --seed S         semilla del PRNG de colores       (def %llu)\n"
 "\n"
-"Kernels:\n"
-"  --physics 0|1    repulsion Douady-Couder          (def 1)\n"
-"  --voronoi 0|1    celdas (1) o solo puntos (0)      (def 1)\n"
+"Deriva de color (las semillas ya colocadas cambian de tono con el tiempo):\n"
+"  --color-speed V  vueltas de tono por segundo       (def %.2f, 0 = fijo)\n"
+"  --color-spread F dispersion del ritmo entre semillas 0..1 (def %.2f)\n"
 "\n"
-"Paralelismo y medicion:\n"
-"  --threads T      hilos OpenMP, 0 = maximo          (def 0)\n"
+"Kernels:\n"
+"  --physics 0|1    repulsion Douady-Couder          (def 0)\n"
+"  --voronoi 0|1    celdas (1) o bolitas (0)          (def 0)\n"
+"  --raster 0|1     bolitas rasterizadas: plan B barato, NO escala con N\n"
+"\n"
+"Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"
 "  --no-render      corre sin abrir ventana (headless)\n"
 "  --csv            salida de mediciones en CSV\n"
@@ -170,7 +174,9 @@ void args_usage(const char *prog)
         SS_DEF_HEIGHT, SS_HEIGHT_MIN,
         SS_DEF_ROT_SPEED,
         SS_DEF_FILL,
-        (unsigned long long)SS_DEF_SEED);
+        (unsigned long long)SS_DEF_SEED,
+        SS_DEF_COLOR_SPEED,
+        SS_DEF_COLOR_SPREAD);
 }
 
 ArgsStatus args_parse(int argc, char **argv, Config *cfg)
@@ -222,17 +228,6 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
             cfg->bench_frames = (int)v;
         }
-        else if (strcmp(a, "--threads") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            long v;
-            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
-            if (v < 0) {
-                fprintf(stderr, "error: --threads no puede ser negativo (0 = maximo)\n");
-                goto bad;
-            }
-            cfg->threads = (int)v;
-        }
-
         /* --- reales ------------------------------------------------------ */
         else if (strcmp(a, "--angle") == 0) {
             /* El usuario piensa en grados (137.5); adentro todo va en radianes. */
@@ -254,6 +249,19 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             cfg->sphere_frac = v;
         }
 
+        else if (strcmp(a, "--color-speed") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->color_speed = v;
+        }
+        else if (strcmp(a, "--color-spread") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->color_spread = v;
+        }
+
         /* --- sin signo de 64 bits --------------------------------------- */
         else if (strcmp(a, "--seed") == 0) {
             const char *s = take_value(argc, argv, &i, a);
@@ -268,6 +276,9 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
         }
         else if (strcmp(a, "--voronoi") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->voronoi) != 0) goto bad;
+        }
+        else if (strcmp(a, "--raster") == 0) {
+            if (take_bool(argc, argv, &i, a, &cfg->raster) != 0) goto bad;
         }
         else if (strcmp(a, "--vsync") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->vsync) != 0) goto bad;

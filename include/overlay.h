@@ -21,13 +21,9 @@
 void overlay_text(Framebuffer *fb, int x, int y, const char *s,
                   uint32_t color, int scale);
 
-/* Dibuja el bloque de estadisticas arriba a la izquierda: FPS, N y numero de
- * hilos. Los FPS salen en ROJO cuando caen por debajo de SS_FPS_TARGET (30),
- * que es el umbral del enunciado: asi el trabon de la demo no hay que
- * explicarlo, se ve. 'n_visible' es cuantas semillas se dibujaron este frame.
- *
- * Mostrar N y hilos en pantalla es la prueba, en la presentacion, de que el
- * binario secuencial y el paralelo corren EXACTAMENTE el mismo N. */
+/* Dibuja FPS y N arriba a la izquierda. Los FPS salen en ROJO cuando caen
+ * por debajo de SS_FPS_TARGET (30). 'n_visible' es cuantas semillas se
+ * dibujaron este frame. */
 void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible);
 
 /* Dibuja una 4ta linea con el angulo de divergencia medio actual (grados).

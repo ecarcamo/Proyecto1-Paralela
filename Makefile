@@ -2,13 +2,13 @@
 #  Proyecto 1 - Computacion Paralela y Distribuida (UVG, Seccion 20)
 #  Screensaver: Animated Fibonacci Sphere
 #
-#  Un solo arbol de codigo produce DOS binarios:
-#     bin/screensaver_seq  ->  SIN -fopenmp  (los #pragma omp quedan inertes)
-#     bin/screensaver_omp  ->  CON -fopenmp
+#  En esta etapa del proyecto hay UN solo binario:
+#     bin/screensaver_seq  ->  el programa secuencial, sin OpenMP
 #
-#  Esa es la razon de no duplicar el codigo: las directivas de OpenMP son
-#  ignoradas por el compilador si no se le pasa la bandera, asi que el
-#  baseline secuencial y la version paralela salen del MISMO fuente.
+#  No hay paralelismo todavia: ni #pragma omp en el codigo ni -fopenmp en la
+#  compilacion. Este es el baseline honesto que despues se va a medir contra
+#  la version paralela; el andamiaje de OpenMP entra cuando entre el primer
+#  pragma, no antes.
 #
 #  Equipo: Esteban Carcamo (Linux) - Nico (macOS) - Dieguito (Windows/MSYS2)
 # ============================================================================
@@ -46,31 +46,12 @@ ifeq ($(strip $(SDL2_LIBS)),)
     SDL2_LIBS := -lSDL2
 endif
 
-# -------------------------------------------------------------------- OpenMP
-# Linux y Windows/MSYS2 usan GCC, que trae OpenMP de fabrica.
-# macOS es el caso especial: Apple Clang NO incluye OpenMP, hay que instalar
-# libomp con Homebrew y pasarle el preprocesador a mano.
-#     brew install libomp sdl2
-ifeq ($(PLATFORM),macos)
-    BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
-    ifeq ($(strip $(BREW_PREFIX)),)
-        BREW_PREFIX := /opt/homebrew
-    endif
-    LIBOMP := $(BREW_PREFIX)/opt/libomp
-    OMP_CFLAGS := -Xpreprocessor -fopenmp -I$(LIBOMP)/include
-    OMP_LDLIBS := -L$(LIBOMP)/lib -lomp
-else
-    OMP_CFLAGS := -fopenmp
-    OMP_LDLIBS := -fopenmp
-endif
-
 # --------------------------------------------------------------------- rutas
 SRC_DIR  := src
 INC_DIR  := include
 TEST_DIR := tests
 BIN_DIR  := bin
 OBJ_SEQ  := build/seq
-OBJ_OMP  := build/omp
 
 # Todos los .c de src/ salvo main.c forman la biblioteca comun, para que los
 # tests puedan enlazarla sin arrastrar SDL ni el bucle principal.
@@ -79,27 +60,21 @@ MAIN_SRC  := $(SRC_DIR)/main.c
 LIB_SRCS  := $(filter-out $(MAIN_SRC),$(ALL_SRCS))
 
 LIB_OBJS_SEQ := $(patsubst $(SRC_DIR)/%.c,$(OBJ_SEQ)/%.o,$(LIB_SRCS))
-LIB_OBJS_OMP := $(patsubst $(SRC_DIR)/%.c,$(OBJ_OMP)/%.o,$(LIB_SRCS))
 MAIN_OBJ_SEQ := $(patsubst $(SRC_DIR)/%.c,$(OBJ_SEQ)/%.o,$(wildcard $(MAIN_SRC)))
-MAIN_OBJ_OMP := $(patsubst $(SRC_DIR)/%.c,$(OBJ_OMP)/%.o,$(wildcard $(MAIN_SRC)))
 
 TEST_SRCS := $(wildcard $(TEST_DIR)/*.c)
 TEST_BINS := $(patsubst $(TEST_DIR)/%.c,$(BIN_DIR)/%,$(TEST_SRCS))
 
 SEQ_BIN := $(BIN_DIR)/screensaver_seq
-OMP_BIN := $(BIN_DIR)/screensaver_omp
 
 # ------------------------------------------------------------------- targets
-.PHONY: all seq omp tests test clean distclean print-config help
+.PHONY: all seq tests test clean distclean print-config help
 
-## all: compila los dos binarios y los tests (por defecto)
-all: seq omp tests
+## all: binario secuencial y tests (por defecto)
+all: seq tests
 
-## seq: binario secuencial, sin OpenMP  <- el baseline honesto que se mide
+## seq: el binario secuencial  <- el unico que existe en esta etapa
 seq: $(SEQ_BIN)
-
-## omp: binario paralelo, con OpenMP
-omp: $(OMP_BIN)
 
 ## tests: arneses de verificacion (no necesitan SDL)
 tests: $(TEST_BINS)
@@ -112,28 +87,16 @@ $(SEQ_BIN): $(LIB_OBJS_SEQ) $(MAIN_OBJ_SEQ) | $(BIN_DIR)
 	   $(CC) $(CFLAGS) $(SDL2_CFLAGS) $^ -o $@ $(SDL2_LIBS) $(LDLIBS); \
 	 fi
 
-$(OMP_BIN): $(LIB_OBJS_OMP) $(MAIN_OBJ_OMP) | $(BIN_DIR)
-	@if [ -z "$(MAIN_OBJ_OMP)" ]; then \
-	   echo ">> src/main.c todavia no existe: se omite $(OMP_BIN)"; \
-	 else \
-	   echo "  LD  $@ [OpenMP]"; \
-	   $(CC) $(CFLAGS) $(OMP_CFLAGS) $(SDL2_CFLAGS) $^ -o $@ $(SDL2_LIBS) $(OMP_LDLIBS) $(LDLIBS); \
-	 fi
-
 $(OBJ_SEQ)/%.o: $(SRC_DIR)/%.c | $(OBJ_SEQ)
 	@echo "  CC  $< [secuencial]"
 	@$(CC) $(CFLAGS) $(SDL2_CFLAGS) -MMD -MP -c $< -o $@
 
-$(OBJ_OMP)/%.o: $(SRC_DIR)/%.c | $(OBJ_OMP)
-	@echo "  CC  $< [OpenMP]"
-	@$(CC) $(CFLAGS) $(OMP_CFLAGS) $(SDL2_CFLAGS) -MMD -MP -c $< -o $@
-
-# Los tests enlazan la biblioteca secuencial: verifican matematica, no velocidad.
+# Los tests enlazan la biblioteca comun: verifican matematica, no velocidad.
 $(BIN_DIR)/%: $(TEST_DIR)/%.c $(LIB_OBJS_SEQ) | $(BIN_DIR)
 	@echo "  LD  $@ [test]"
 	@$(CC) $(CFLAGS) $< $(LIB_OBJS_SEQ) -o $@ $(LDLIBS)
 
-$(BIN_DIR) $(OBJ_SEQ) $(OBJ_OMP):
+$(BIN_DIR) $(OBJ_SEQ):
 	@mkdir -p $@
 
 ## test: compila y ejecuta el arnes de verificacion matematica
@@ -155,8 +118,6 @@ print-config:
 	@echo "CFLAGS      : $(CFLAGS)"
 	@echo "SDL2_CFLAGS : $(SDL2_CFLAGS)"
 	@echo "SDL2_LIBS   : $(SDL2_LIBS)"
-	@echo "OMP_CFLAGS  : $(OMP_CFLAGS)"
-	@echo "OMP_LDLIBS  : $(OMP_LDLIBS)"
 	@echo "LIB_SRCS    : $(LIB_SRCS)"
 	@echo "TEST_SRCS   : $(TEST_SRCS)"
 
@@ -164,4 +125,9 @@ print-config:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /'
 
--include $(LIB_OBJS_SEQ:.o=.d) $(LIB_OBJS_OMP:.o=.d)
+# Los .d de -MMD: sin esto, tocar un .h NO recompila lo que lo incluye.
+# MAIN_OBJ_SEQ tiene que estar: main.c incluye config.h, y cuando faltaba,
+# agregar un campo a Config dejaba main.o compilado contra la estructura VIEJA
+# -- misma direccion, offsets corridos -- y el programa leia basura en los
+# campos de mas abajo sin que nada fallara al compilar ni al enlazar.
+-include $(LIB_OBJS_SEQ:.o=.d) $(MAIN_OBJ_SEQ:.o=.d)

@@ -146,6 +146,7 @@ static int run_window(Config *cfg)
     double last      = now_seconds();
     double fps_ema   = 0.0;                  /* media movil exponencial */
     int    running   = 1;
+    int    primer_frame = 1;                 /* su dt no es un frame real */
 
     while (running) {
         /* -- eventos (en el hilo principal, como exige macOS) ------------ */
@@ -188,11 +189,14 @@ static int run_window(Config *cfg)
         if (!cfg->paused) sim_t += dt;
 
         /* -- fisica: repulsion de Coulomb + Verlet, solo si esta activa y no
-         *    en pausa. El clamp evita un dt gigante tras una pausa larga o un
-         *    hipo del sistema, que mandaria las semillas a volar de un salto. */
+         *    en pausa. El clamp NO es un 0.1 fijo: el limite de estabilidad de
+         *    Verlet depende de N (va como 1/sqrt(N), ver physics_max_dt). Con
+         *    un tope fijo y N grande la integracion explota y el patron de
+         *    Fibonacci se deshace en menos de un segundo. Pasado el tope la
+         *    fisica avanza en camara lenta, que es preferible a que reviente. */
         if (!cfg->paused && cfg->physics) {
-            double dt_phys = dt;
-            if (dt_phys > 0.1) dt_phys = 0.1;
+            double dt_max  = physics_max_dt(seeds.n);
+            double dt_phys = (dt < dt_max) ? dt : dt_max;
             PhysicsParams pp = { SS_DEF_PHYS_K, SS_DEF_PHYS_EPSILON,
                                   SS_DEF_PHYS_GAMMA, SS_DEF_PHYS_MASS };
             physics_step(&seeds, &pp, dt_phys);
@@ -211,11 +215,16 @@ static int run_window(Config *cfg)
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);
 
-        /* -- FPS: media movil exponencial sobre el dt instantaneo -------- */
-        if (dt > 0.0) {
+        /* -- FPS: media movil exponencial sobre el dt instantaneo.
+         *    El primer frame NO cuenta: su 'dt' solo mide el tiempo entre que
+         *    se armo el reloj y el primer PollEvent (microsegundos), no un
+         *    frame de verdad. Sembrar la media con eso mostraba FPS de decenas
+         *    de miles durante los primeros segundos. */
+        if (dt > 0.0 && !primer_frame) {
             double inst = 1.0 / dt;
             fps_ema = (fps_ema > 0.0) ? (fps_ema * 0.9 + inst * 0.1) : inst;
         }
+        primer_frame = 0;
     }
 
     rc = EXIT_SUCCESS;

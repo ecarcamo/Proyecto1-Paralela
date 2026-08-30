@@ -148,18 +148,30 @@ void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible
     overlay_text(fb, x, y, buf, fps_col, scale);
     y += line_h;
 
-    /* --- Linea 2: N y numero de hilos (la prueba de que seq y omp corren el
-     *     mismo N en la presentacion). --------------------------------------- */
-    if (cfg->threads > 0)
-        snprintf(buf, sizeof buf, "N=%d  HILOS=%d", cfg->n, cfg->threads);
-    else
-        snprintf(buf, sizeof buf, "N=%d  HILOS=MAX", cfg->n);
+    snprintf(buf, sizeof buf, "N=%d", cfg->n);
     overlay_text(fb, x, y, buf, DIM, scale);
     y += line_h;
 
     /* --- Linea 3: modo de dibujo y semillas visibles este frame. ---------- */
     snprintf(buf, sizeof buf, "%s  VIS=%d",
-             cfg->voronoi ? "VORONOI" : "PUNTOS", n_visible);
+             cfg->voronoi ? "VORONOI" : "BOLITAS", n_visible);
+    overlay_text(fb, x, y, buf, DIM, scale);
+}
+
+void overlay_physics(Framebuffer *fb, const Config *cfg, double divergence_deg)
+{
+    if (fb == NULL || fb->px == NULL || cfg == NULL) return;
+
+    const int scale = (fb->h >= 700) ? 2 : 1;
+    const int line_h = GLYPH_H * scale + 3;
+    const int x = 8;
+    /* misma columna que overlay_stats, una linea mas abajo (3 lineas + margen) */
+    const int y = 8 + line_h * 3;
+
+    const uint32_t DIM = 0xFFB0B0C0u;
+
+    char buf[64];
+    snprintf(buf, sizeof buf, "DIVERGENCIA=%.2f", divergence_deg);
     overlay_text(fb, x, y, buf, DIM, scale);
 }
 
