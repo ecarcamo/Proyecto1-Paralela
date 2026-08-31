@@ -98,6 +98,47 @@
 #define SS_DEF_MUZZLE_SPEED  1.5     /* radios por segundo; el vuelo dura 1/V */
 #define SS_DEF_TRAIL         6       /* fantasmas de estela por bolita en vuelo */
 
+/* --------------------------------------------------------------------------
+ *  Modo canon, segunda parte: K canones y animacion infinita.
+ *
+ *  Con un solo canon y sin recirculacion la animacion TIENE FINAL: cuando
+ *  aterriza la bolita N queda una esfera estatica y no pasa nada mas. Con K
+ *  canones eso empeora, porque se llena K veces mas rapido. Por eso el slot i
+ *  no se queda quieto para siempre: se vuelve a disparar cada T_ciclo
+ *  segundos (ver sphere_fill_cannon()). La esfera se mantiene llena, los
+ *  canones no paran nunca, y la formula sigue siendo cerrada -- solo se le
+ *  agrega un fmod.
+ *
+ *  Efecto lateral que importa para el informe: con recirculacion la carga
+ *  dibujada es CONSTANTE en regimen permanente, asi que K pasa a ser una
+ *  perilla de carga de verdad, ortogonal a N. Se puede subir el costo por
+ *  frame sin tocar la geometria de la esfera.
+ *
+ *  El default de K es 1 para que el modo canon se siga viendo igual que
+ *  antes salvo por la recirculacion, y el radio de boca es > 0 porque con
+ *  todas las bocas en el origen exacto las bolitas recien disparadas se
+ *  apilan y se solapan feo (y con K > 1 los canones no se distinguirian).
+ * -------------------------------------------------------------------------- */
+#define SS_DEF_CANNONS       1       /* --cannons K: canones simultaneos      */
+#define SS_DEF_MUZZLE_RADIUS 0.12    /* --muzzle-radius r0: donde estan las bocas */
+#define SS_MUZZLE_RADIUS_MAX 0.95    /* r0 >= 1 dispararia desde afuera       */
+
+/* Reparto de indices entre los K canones (--cannon-layout).
+ *
+ *  ROUNDROBIN: el canon c se queda con los indices c, c+K, c+2K, ...  Como
+ *  los indices consecutivos estan separados por el angulo aureo, los chorros
+ *  se entremezclan y la esfera se puebla pareja. Es el default: mantiene la
+ *  uniformidad, que es justamente el punto del patron.
+ *
+ *  BLOCKS: el canon c se hace cargo de un rango contiguo de indices y se ven
+ *  K frentes avanzando por bandas. Mas espectacular, menos uniforme.
+ *
+ *  Las dos reparten los N indices EXACTAMENTE una vez, sin huecos ni
+ *  repetidos (lo verifica el test de cobertura). */
+#define SS_CANNON_ROUNDROBIN 0
+#define SS_CANNON_BLOCKS     1
+#define SS_DEF_CANNON_LAYOUT SS_CANNON_ROUNDROBIN
+
 /* ==========================================================================
  *  Config - una sola estructura para todo el programa.
  * ========================================================================== */
@@ -129,6 +170,9 @@ typedef struct {
     double   fire_rate;     /* --fire-rate   disparos por segundo            */
     double   muzzle_speed;  /* --muzzle-speed radios por segundo             */
     int      trail;         /* --trail       fantasmas de estela por bolita  */
+    int      cannons;       /* --cannons     K canones simultaneos (>= 1)    */
+    int      cannon_layout; /* --cannon-layout  SS_CANNON_ROUNDROBIN|BLOCKS  */
+    double   muzzle_radius; /* --muzzle-radius  radio de la esfera de bocas  */
 
     /* --- modo medicion ------------------------------------------------ */
     int      bench_frames;  /* --bench K  0 = modo ventana normal            */

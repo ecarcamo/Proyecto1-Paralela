@@ -164,6 +164,10 @@ void args_usage(const char *prog)
 "  --fire-rate R       disparos por segundo               (def %.1f)\n"
 "  --muzzle-speed V    radios por segundo (vuelo dura 1/V) (def %.2f)\n"
 "  --trail L           fantasmas de estela por bolita      (def %d)\n"
+"  --cannons K         canones simultaneos, 1..N           (def %d)\n"
+"  --cannon-layout M   roundrobin | blocks                 (def roundrobin)\n"
+"  --muzzle-radius R0  radio de la esfera de bocas, [0,%.2f] (def %.2f)\n"
+"                      (los slots recirculan: la animacion no se termina)\n"
 "\n"
 "Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"
@@ -185,7 +189,10 @@ void args_usage(const char *prog)
         SS_DEF_COLOR_SPREAD,
         SS_DEF_FIRE_RATE,
         SS_DEF_MUZZLE_SPEED,
-        SS_DEF_TRAIL);
+        SS_DEF_TRAIL,
+        SS_DEF_CANNONS,
+        SS_MUZZLE_RADIUS_MAX,
+        SS_DEF_MUZZLE_RADIUS);
 }
 
 ArgsStatus args_parse(int argc, char **argv, Config *cfg)
@@ -243,6 +250,12 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
             cfg->trail = (int)v;
         }
+        else if (strcmp(a, "--cannons") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            long v;
+            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
+            cfg->cannons = (int)v;
+        }
         /* --- reales ------------------------------------------------------ */
         else if (strcmp(a, "--angle") == 0) {
             /* El usuario piensa en grados (137.5); adentro todo va en radianes. */
@@ -287,6 +300,28 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             double v;
             if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
             cfg->muzzle_speed = v;
+        }
+        else if (strcmp(a, "--muzzle-radius") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->muzzle_radius = v;
+        }
+
+        /* --- enumerados por nombre --------------------------------------
+         * El reparto se pide por nombre y no por 0|1: 'blocks' se lee solo,
+         * '--cannon-layout 1' obligaria a ir al header a ver cual era cual. */
+        else if (strcmp(a, "--cannon-layout") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            if (s == NULL) goto bad;
+            if (strcmp(s, "roundrobin") == 0)   cfg->cannon_layout = SS_CANNON_ROUNDROBIN;
+            else if (strcmp(s, "blocks") == 0)  cfg->cannon_layout = SS_CANNON_BLOCKS;
+            else {
+                fprintf(stderr,
+                        "error: --cannon-layout espera 'roundrobin' o 'blocks', "
+                        "se recibio '%s'\n", s);
+                goto bad;
+            }
         }
 
         /* --- sin signo de 64 bits --------------------------------------- */

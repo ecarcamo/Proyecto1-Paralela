@@ -52,6 +52,9 @@ Config config_defaults(void)
     cfg.fire_rate    = SS_DEF_FIRE_RATE;
     cfg.muzzle_speed = SS_DEF_MUZZLE_SPEED;
     cfg.trail        = SS_DEF_TRAIL;
+    cfg.cannons      = SS_DEF_CANNONS;
+    cfg.cannon_layout= SS_DEF_CANNON_LAYOUT;
+    cfg.muzzle_radius= SS_DEF_MUZZLE_RADIUS;
 
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
@@ -158,8 +161,53 @@ int config_validate(const Config *cfg)
                 cfg->trail);
         return -13;
     }
+    /* K canones: al menos uno, y no mas que indices para repartir. Con K > N
+     * habria canones sin un solo indice asignado: no es un error sutil, es
+     * pedir algo que no existe. */
+    if (cfg->cannon && cfg->cannons < 1) {
+        fprintf(stderr, "error: --cannons debe ser >= 1 (se recibio %d)\n",
+                cfg->cannons);
+        return -14;
+    }
+    if (cfg->cannon && cfg->cannons > cfg->n) {
+        fprintf(stderr,
+                "error: --cannons %d es mayor que N = %d: sobrarian canones sin\n"
+                "       ningun indice que disparar.\n",
+                cfg->cannons, cfg->n);
+        return -15;
+    }
+    /* La boca tiene que quedar ADENTRO de la esfera: con r0 >= 1 el canon
+     * estaria sobre la superficie o afuera, y el "vuelo" iria hacia adentro. */
+    if (cfg->cannon && (cfg->muzzle_radius < 0.0 ||
+                        cfg->muzzle_radius > SS_MUZZLE_RADIUS_MAX)) {
+        fprintf(stderr,
+                "error: --muzzle-radius debe estar en [0, %.2f] (se recibio %.3f)\n",
+                SS_MUZZLE_RADIUS_MAX, cfg->muzzle_radius);
+        return -16;
+    }
+    if (cfg->cannon && cfg->cannon_layout != SS_CANNON_ROUNDROBIN &&
+                       cfg->cannon_layout != SS_CANNON_BLOCKS) {
+        fprintf(stderr, "error: --cannon-layout debe ser 'roundrobin' o 'blocks'\n");
+        return -17;
+    }
 
     /* --- Advertencias: no abortan, es decision del usuario ------------- */
+    /* Bolitas en vuelo en regimen permanente = K*R/V. Si eso supera N, en
+     * todo instante hay mas bolitas viajando que posiciones en el patron: la
+     * esfera nunca termina de llenarse y lo que se ve es un chorro, no una
+     * esfera densificandose. Es una eleccion legitima para forzar carga, asi
+     * que se avisa y se sigue: la decision es del usuario. */
+    if (cfg->cannon && cfg->muzzle_speed > 0.0) {
+        double en_vuelo = (double)cfg->cannons * cfg->fire_rate / cfg->muzzle_speed;
+        if (en_vuelo > (double)cfg->n) {
+            fprintf(stderr,
+                    "aviso: K*R/V = %.1f bolitas en vuelo supera N = %d; la esfera\n"
+                    "       no va a llegar a llenarse. Baja --cannons/--fire-rate,\n"
+                    "       sube --muzzle-speed, o subi --n.\n",
+                    en_vuelo, cfg->n);
+        }
+    }
+
     if (cfg->bench_frames > 0 && cfg->vsync) {
         fprintf(stderr,
                 "aviso: --bench con vsync activo mide el tope del monitor, no\n"
@@ -198,9 +246,36 @@ void config_print(const Config *cfg)
            cfg->voronoi ? "celdas de Voronoi (raycasting, O(P*N))"
                         : (cfg->raster ? "bolitas rasterizadas (plan B, ~O(1) en N)"
                                        : "bolitas por raycasting (O(P*N))"));
-    if (cfg->cannon)
+    if (cfg->cannon) {
         printf("  canon             : encendido (fire-rate=%.1f/s  muzzle-speed=%.2f  trail=%d)\n",
                cfg->fire_rate, cfg->muzzle_speed, cfg->trail);
+        printf("  canones           : %d (%s)  radio de boca %.3f\n",
+               cfg->cannons,
+               cfg->cannon_layout == SS_CANNON_BLOCKS ? "bloques contiguos"
+                                                      : "round-robin",
+               cfg->muzzle_radius);
+        /* El modelo de carga del informe, impreso con los numeros de ESTA
+         * corrida. Sale aca y no en el informe a mano para que no se
+         * desincronice del codigo:
+         *
+         *     dibujadas = n + (K*R/V) * (L/2)
+         *
+         * Las bolitas en vuelo NO se suman aparte de n: con recirculacion
+         * cada indice esta o aterrizado o volando, nunca las dos cosas, asi
+         * que las reales son siempre n y lo unico que se agrega son los
+         * fantasmas. Y son L/2 y no L por bolita en vuelo, porque una recien
+         * salida todavia no desplego la cola (los fantasmas no cruzan hacia
+         * atras de su propio disparo) y la cantidad crece lineal con la fase.
+         * Verificado contra el codigo en tests/test_sphere.c, seccion 8. */
+        if (cfg->muzzle_speed > 0.0) {
+            double en_vuelo = (double)cfg->cannons * cfg->fire_rate / cfg->muzzle_speed;
+            if (en_vuelo > (double)cfg->n) en_vuelo = (double)cfg->n;
+            printf("  ciclo / carga     : T_ciclo=%.2f s   en vuelo=%.0f   dibujadas~%.0f\n",
+                   (double)((cfg->n + cfg->cannons - 1) / cfg->cannons) / cfg->fire_rate,
+                   en_vuelo,
+                   (double)cfg->n + en_vuelo * (double)cfg->trail / 2.0);
+        }
+    }
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);
