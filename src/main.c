@@ -52,8 +52,8 @@
 static void regen_sphere(SeedSet *seeds, const Config *cfg)
 {
     if (cfg->cannon) {
-        sphere_fill_cannon(seeds, cfg->n, cfg->angle_rad, cfg->seed,
-                           cfg->fire_rate, cfg->muzzle_speed, cfg->trail, 0.0);
+        CannonParams cp = cannon_params_from_config(cfg);
+        sphere_fill_cannon(seeds, &cp, 0.0);
     } else {
         sphere_fill_fibonacci(seeds, cfg->n, cfg->angle_rad, cfg->seed);
     }
@@ -68,8 +68,8 @@ static void regen_sphere(SeedSet *seeds, const Config *cfg)
 static void cannon_update(SeedSet *seeds, const Config *cfg, double sim_t)
 {
     if (!cfg->cannon) return;
-    sphere_fill_cannon(seeds, cfg->n, cfg->angle_rad, cfg->seed,
-                       cfg->fire_rate, cfg->muzzle_speed, cfg->trail, sim_t);
+    CannonParams cp = cannon_params_from_config(cfg);
+    sphere_fill_cannon(seeds, &cp, sim_t);
 }
 
 /* ==========================================================================
@@ -82,9 +82,8 @@ static int run_headless(Config *cfg)
     Framebuffer fb    = {0};
     int rc = EXIT_FAILURE;
 
-    int cap = cfg->cannon
-        ? sphere_cannon_capacity(cfg->n, cfg->fire_rate, cfg->muzzle_speed, cfg->trail)
-        : cfg->n;
+    CannonParams cp = cannon_params_from_config(cfg);
+    int cap = cfg->cannon ? sphere_cannon_capacity(&cp) : cfg->n;
     if (seedset_alloc(&seeds, cap) != 0) {
         fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cap);
         goto cleanup;
@@ -123,9 +122,8 @@ static int run_window(Config *cfg)
     int rc = EXIT_FAILURE;
 
     /* --- datos: semillas y framebuffer --------------------------------- */
-    int cap = cfg->cannon
-        ? sphere_cannon_capacity(cfg->n, cfg->fire_rate, cfg->muzzle_speed, cfg->trail)
-        : cfg->n;
+    CannonParams cp = cannon_params_from_config(cfg);
+    int cap = cfg->cannon ? sphere_cannon_capacity(&cp) : cfg->n;
     if (seedset_alloc(&seeds, cap) != 0) {
         fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cap);
         goto cleanup;
