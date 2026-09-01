@@ -47,8 +47,8 @@ Sea:
 | `P` | Píxeles **dentro de la silueta** de la esfera | **287,285** (31.2 % de la pantalla) |
 | `N` | Semillas | parámetro |
 | `T_d` | Evaluaciones de producto punto por segundo, 1 hilo | **1.175 × 10⁹ /s** ✅ *medido* |
-| `T_p` | Evaluaciones de par de repulsión por segundo, 1 hilo | ≈ 1 × 10⁹ /s *(a medir)* |
-| `a` | Costo fijo del frame (present + textura + overlay + fondo) | ≈ 1.5 ms *(a medir)* |
+| `T_p` | Evaluaciones de par de repulsión por segundo, 1 hilo | **6.2 × 10⁸ /s** ✅ *medido, §3.6C* |
+| `a` | Costo fijo del frame (present + textura + overlay + fondo) | **2.8 ms** ✅ *medido, §3.6D* |
 
 El tiempo de un frame se descompone en tres términos:
 
@@ -198,15 +198,187 @@ tocar el algoritmo.
 | | Esteban | Nico | Dieguito |
 |---|---|---|---|
 | SO | Linux | macOS | Windows |
-| Hilos | 32 (i9-13980HX, híbrido P+E) | por medir | por medir |
-| `T_d` medido | **1.175 × 10⁹ /s** ✅ | por medir | por medir |
-| `N_crit^seq` @1280×720 | **130** ✅ | por medir | por medir |
-| `N_crit^omp` esperado | ~4,000 | ∝ núcleos | ∝ núcleos |
+| Hilos | 32 (i9-13980HX, híbrido P+E) | 12 (Apple M4 Pro, 8P + 4E) ✅ | por medir |
+| `T_d` medido | **1.175 × 10⁹ /s** ✅ | **2.095 × 10⁹ /s** ✅ | por medir |
+| `N_crit^seq` @1280×720 | **130** ✅ | **87** ✅ *(medido, §3.5)* | por medir |
+| `N_crit^omp` esperado | ~4,000 | ~7,000 (por medir) | ∝ núcleos |
 
 `N_crit^seq` debería ser **parecido en las tres** (depende del IPC de un solo núcleo);
 `N_crit^omp` debería escalar con el número de núcleos. **Que las tres máquinas den un
 `N_crit^seq` parecido pero un `N_crit^omp` muy distinto es, por sí solo, evidencia de que
 el speedup viene del paralelismo y no de otra cosa.** Las tres tablas van al informe.
+
+### 3.5 Barrido medido en el MacBook (Apple M4 Pro) — el N de la demo
+
+Barrido real del baseline secuencial, **10 repeticiones por punto**, headless
+(`--bench K --no-render --csv`), kernel por defecto, 1280×720. Datos crudos en
+[`datos/nico_m4pro_seq_barrido.csv`](../datos/nico_m4pro_seq_barrido.csv).
+
+| N | `T` mediana | FPS | sd | Lectura |
+|---:|---:|---:|---:|---|
+| 32 | 19.9 ms | 49.8 | 0.28 | fluido |
+| 64 | 27.6 ms | 36.0 | 0.28 | fluido |
+| **87** | **33.3 ms** | **30.0** | — | ⚠️ **`N_crit^seq`** *(interpolado; medido en N=88 → 29.6 FPS)* |
+| 128 | 44.6 ms | 22.3 | 0.43 | ya no cumple el enunciado |
+| 192 | 61.6 ms | 16.2 | 0.51 | tirones evidentes |
+| 352 | 99.1 ms | 10.1 | — | 10 FPS |
+| 512 | 134.9 ms | 7.4 | 0.61 | |
+| **848** | **209.8 ms** | **4.8** | — | pase de diapositivas |
+| **1000** | **244.1 ms** | **4.10** | 1.4 | 🎯 **N elegido para la demo de OpenMP** |
+| 1536 | 348.9 ms | 2.9 | 1.15 | |
+| 2048 | 453.9 ms | 2.2 | 1.78 | |
+| 3000 | 645.1 ms | 1.6 | 3.23 | |
+| 4000 | 849.7 ms | 1.2 | 7.64 | congelado |
+| ~4740 | ~1000 ms | 1.0 | — | un segundo por frame *(extrapolado)* |
+
+**El costo es lineal, como predice §2.1.** La pendiente local `b` baja de 0.25 ms/semilla
+en N≈100 a 0.205 en N≈3000 (la esfera ya no cabe en L2 pero el acceso se vuelve más
+secuencial); el término cuadrático de la física nunca aparece porque `--physics 0` es el
+defecto y, aun encendido, §2.1 lo ubica en N≈244,500.
+
+**Nota sobre `T_d`.** El microbenchmark de `make test` da 2.095×10⁹ productos punto/s →
+0.137 ms/semilla, pero la pendiente **medida en el render real es 0.205–0.25 ms/semilla**,
+un 50–80 % más. La diferencia es lo que el microbenchmark no ve: escritura del
+framebuffer, setup por píxel y tráfico de memoria. **Para el informe vale la pendiente
+medida, no la del microbenchmark.**
+
+#### Por qué N = 1000 y no otro
+
+El N de la demo tiene que cumplir **dos** condiciones a la vez, no una:
+
+1. **Secuencial visiblemente trabado.** A 4.10 FPS nadie discute que está trabado: son
+   244 ms por frame, más de siete veces el presupuesto de 33.3 ms.
+2. **Que OpenMP lo pueda rescatar.** Para volver a ≥30 FPS hace falta un speedup de
+   `244.1 / 33.3 = 7.32×`. Con 8 P-cores + 4 E-cores y un bucle por píxel que es
+   *embarrassingly parallel*, 7–9× es el rango esperable.
+
+Subir a N=2048 haría la demo más dramática pero exigiría **13.6×**, que estas 12 CPUs no
+dan: el screensaver seguiría trabado en las dos versiones y se pierde el punto.
+
+> **Plan B.** Si el speedup medido queda por debajo de 7.4×, la demo se corre a **N = 800**
+> (210 ms, 4.8 FPS, exige solo 6.3×). Sigue siendo un pase de diapositivas en secuencial.
+
+
+### 3.6 Matriz de configuraciones y escalado extremo (M4 Pro)
+
+Todo el barrido de §3.5 corrió con los **defaults**: `--cannons 0`, `--physics 0`,
+`--voronoi 0`, `--raster 0` — o sea el kernel de **bolitas por raycasting**, sin llenado
+ni física. Estos dos experimentos exploran los otros ejes.
+Datos: [`datos/nico_m4pro_configs.csv`](../datos/nico_m4pro_configs.csv) y
+[`datos/nico_m4pro_escalado_grande.csv`](../datos/nico_m4pro_escalado_grande.csv).
+
+#### A. Costo por configuración, N = 1000, 10 repeticiones
+
+| Configuración | mediana | FPS | × default |
+|---|---:|---:|---:|
+| `--raster 1` | 4.6 ms | 219.2 | 0.02× |
+| `--voronoi 1` | 196.6 ms | 5.09 | 0.83× |
+| `--voronoi 1 --physics 1` | 197.9 ms | 5.05 | 0.84× |
+| **default (bolitas raycast)** | **236.7 ms** | **4.22** | **1.00×** |
+| `--physics 1` | 241.0 ms | 4.15 | 1.02× |
+| `--cannons 8 --recirculate 1` | 432.9 ms | 2.31 | 1.83× |
+| `--cannons 8 --recirculate 1 --trail 16` | 762.9 ms | 1.31 | 3.22× |
+| `--cannons 8 --recirculate 1 --trail 32` | 1276.9 ms | 0.78 | 5.39× |
+| `--cannons 32 --recirculate 1 --trail 32` | 2779.7 ms | 0.36 | 11.74× |
+
+Tres resultados que no eran obvios:
+
+1. **`--voronoi 1` es 17 % más BARATO que el default.** El plan A documentado como
+   "el kernel caro" no lo es: las bolitas por raycasting cuestan más. Los dos son
+   `O(P·N)`, pero el de bolitas paga bounding box y borde suave por esfera.
+2. **`--physics 1` es gratis a este N**: +1.8 %. Coherente con §2.1.
+3. **El modo cañón es un eje de dificultad independiente de N**, y el más potente que
+   tiene el programa: ×11.7 sin tocar `--n`. Son los fantasmas de estela, que se suman
+   a las esferas a raycastear. La carga es `N + (K·R/V)·(L/2)` — con K=32, R=60, V=1.5,
+   L=32 son **20,480 fantasmas** contra 1,000 semillas.
+
+> ⚠️ **Ojo con el cañón como palanca:** el término `(K·R/V)·(L/2)` es **aditivo y no
+> depende de N**. A N=1000 multiplica por 11.7; a N=100,000 multiplica por 1.2. Sirve
+> para hundir el programa con N chico, no para empeorar un N ya grande.
+
+#### B. Escalado hasta ~0 FPS, kernel default, 3 repeticiones
+
+| N | mediana | FPS | por frame |
+|---:|---:|---:|---:|
+| 6,000 | 1,235 ms | 0.810 | 1.2 s |
+| 12,000 | 2,414 ms | 0.414 | 2.4 s |
+| 16,000 | 3,189 ms | 0.314 | 3.2 s |
+| 32,000 | 6,290 ms | 0.159 | 6.3 s |
+| 64,000 | 12,763 ms | 0.078 | 12.8 s |
+| **100,000** | **19,864 ms** | **0.050** | **19.9 s** |
+
+**El costo es lineal hasta N=100,000 sin una sola desviación**: `b = 0.19818 ms/semilla`
+sobre dos órdenes de magnitud. No hay cliff de caché ni rodilla; el kernel es `O(P·N)`
+puro y se comporta como tal.
+
+#### C. Corrección a §2.1: el cruce O(N²) está en N ≈ 124,000, no 244,500
+
+Midiendo `--physics 1` contra el mismo N sin física:
+
+| N | sin física | con física | costo física | pares | `c` |
+|---:|---:|---:|---:|---:|---:|
+| 16,000 | 3,189 ms | 3,615 ms | 426 ms | 2.56×10⁸ | 1.66 ns/par |
+| 32,000 | 6,290 ms | 7,877 ms | 1,587 ms | 1.024×10⁹ | 1.55 ns/par |
+
+→ **`T_p` medido = 6.2×10⁸ pares/s**, no los 10⁹ estimados. El cruce real es
+`b/c = 0.198×10⁻³ / 1.6×10⁻⁹ ≈ 124,000`.
+
+**La conclusión de §2.1 no cambia** — el render sigue mandando en todo N usable — pero el
+número sí, y por un factor de 2. `T_p` ya no es una estimación.
+
+#### D. El costo fijo `a` medido
+
+| N | 1 | 2 | 4 | 8 | 16 |
+|---|---:|---:|---:|---:|---:|
+| `T` | 3.70 ms | 5.66 ms | 9.01 ms | 12.94 ms | 16.71 ms |
+
+Extrapolando a N=0: **`a` ≈ 2.8 ms**, no los ~1.5 ms supuestos ni los 12 que sugería el
+ajuste global de §3.5. Es el valor que va en la fracción serial de Amdahl, y es una
+**cota superior**: parte de esos 2.8 ms (relleno de fondo, limpieza del framebuffer)
+también se paraleliza.
+
+---
+
+### 3.7 Por qué NO conviene subir el N de la demo
+
+Tentación natural: si a N=1000 el secuencial da 4.22 FPS, ¿por qué no N=100,000 y 0.05 FPS,
+que se ve mucho más dramático? Porque **el speedup tiene techo en el número de núcleos**:
+
+```
+    FPS_omp(N)  =  FPS_seq(N) × S       con S ≤ p ≈ 8–9.4 en esta máquina
+```
+
+Para que la versión paralela vuelva a ≥30 FPS hace falta `FPS_seq ≥ 30/S ≈ 3.2–3.8`.
+**Por debajo de eso, paralelizar no rescata nada:** a 0.05 FPS, un 8× deja 0.4 FPS — las
+dos versiones se ven trabadas y se pierde toda la demostración.
+
+Proyección con `f = a/T(N)`, `a = 2.8 ms`, y dos escenarios de `p` (`p=8`: solo los
+P-cores, conservador; `p=9.4`: 8P + 4E contando los E-cores al ~35 %):
+
+| N | `T_seq` | FPS seq | `f` | `S` (p=8) | FPS omp | `S` (p=9.4) | FPS omp |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 800 | 209.8 ms | 4.77 | 0.0133 | 7.31 | **35.0** ✅ | 8.41 | **40.1** ✅ |
+| **1,000** | **236.7 ms** | **4.22** | 0.0118 | 7.39 | **31.2** ✅ | 8.55 | **36.1** ✅ |
+| 1,200 | ~280 ms | 3.57 | 0.0100 | 7.48 | 26.7 ❌ | 8.68 | 31.0 ⚠️ |
+| 2,048 | 453.9 ms | 2.20 | 0.0062 | 7.63 | 16.8 ❌ | 8.88 | 19.6 ❌ |
+| 16,000 | 3,189 ms | 0.31 | 0.0009 | 7.94 | 2.5 ❌ | 9.29 | 2.9 ❌ |
+| 100,000 | 19,864 ms | 0.05 | 0.0001 | 7.99 | 0.4 ❌ | 9.36 | 0.5 ❌ |
+
+> **La ventana de la demo se cierra en N ≈ 1,000–1,200.** N=1000 no es un punto tibio:
+> es el techo de lo rescatable en esta máquina.
+
+#### Dos N para dos objetivos distintos
+
+| | N | Para qué |
+|---|---:|---|
+| **N de la demo** | **1,000** | Secuencial roto (4.22 FPS) y OpenMP fluido (31–36 FPS). Es el único régimen donde "el peor del secuencial" se vuelve *bueno* en paralelo. Va al video y a la defensa. |
+| **N de la curva de escalabilidad** | **16,000** | Donde el **speedup medido es máximo**: `f = 0.0009` → el techo de Amdahl es 7.94× de 8. Las dos versiones se arrastran, pero el *factor* es el mejor y es el número para el análisis Amdahl/Gustafson del informe. |
+
+**Por qué 16,000 y no 100,000 para la curva:** a N=16,000 la fracción serial ya es 0.0009
+y el techo de Amdahl es el 99.3 % del ideal — N=100,000 aporta un 0.6 % más de speedup y
+cuesta **6× más medir** (19.9 s por frame; 10 repeticiones de 6 frames son 20 minutos por
+punto, solo del lado secuencial). No paga.
+
 
 ---
 
