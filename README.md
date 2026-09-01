@@ -88,6 +88,7 @@ que adivinar.
 | `--fire-rate <R>` | Disparos por segundo, **por cañón** | 60 |
 | `--muzzle-speed <V>` | Radios por segundo; el vuelo dura `1/V` | 1.5 |
 | `--muzzle-radius <r0>` | Radio de la esfera chica donde están las bocas, [0, 0.95] | 0.12 |
+| `--recirculate <0\|1>` | `0`: aterrizan y se quedan (la esfera se completa). `1`: se redisparan | 0 |
 | `--trail <L>` | Fantasmas de estela por bolita en vuelo | 6 |
 | `--threads <int>` | Hilos de OpenMP | máximo del sistema |
 | `--bench <K>` | Corre K frames sin ventana y reporta tiempos | 0 |
@@ -142,18 +143,45 @@ cae en vivo.
 ./bin/screensaver_seq --n 400 --cannon 1 --cannons 4 --cannon-layout blocks
 ```
 
-**La animación no se termina nunca.** En vez de que el slot *i* aterrice y se quede quieto
-para siempre, se vuelve a disparar cada `T_ciclo` segundos. Todo sigue siendo una función
-cerrada de `t` —sin estado que integrar, sin historial de partículas—; a la fórmula solo se
-le agregó un `fmod`:
+**N es el tope de la esfera, no un punto de partida.** Los cañones reparten los `N` índices
+del patrón, cada uno se dispara una vez y se queda donde aterrizó: a los `techo(N/K)/R`
+segundos la esfera está **completa** y se queda completa. No es una preferencia estética,
+es la única semántica que deja medir — `N` es el parámetro de carga del enunciado, y además
+el patrón de Fibonacci depende de `N` en *todos* sus puntos (`z = 1 - 2(i+½)/N`), así que
+subir `N` en vivo no agregaría una semilla al final: reubicaría a las que ya están.
+
+Que la esfera se complete no significa que la animación muera: siguen el giro (`--rot`) y
+la deriva de color (`--color-speed`).
+
+Todo es función cerrada de `(i, t)` — sin estado que integrar, sin historial de partículas:
 
 ```
-T_ciclo      = techo(N/K) / R
 t_disparo(i) = ronda(i) / R
-fase(i, t)   = fmod(t - t_disparo(i), T_ciclo)
-radio(i, t)  = clamp(V * fase(i, t), 0, 1)
+fase(i, t)   = t - t_disparo(i)                 (0 si todavía no se disparó)
+radio(i, t)  = clamp(V * fase(i, t), 0, 1)      <- satura en 1: aterriza y se queda
 pos(i, t)    = lerp(boca(cañón(i)), dir_fib(i), radio(i, t))
 ```
+
+#### `--recirculate 1`: carga plana para medir
+
+Con el flag encendido, el slot *i* se vuelve a disparar cada `T_ciclo = techo(N/K)/R`
+segundos — a la fórmula de arriba solo se le agrega un `fmod`:
+
+```
+fase(i, t) = fmod(t - t_disparo(i), T_ciclo)
+```
+
+Sirve para el informe, porque deja la carga dibujada constante en régimen permanente. Pero
+**tiene un costo visual que hay que saber**: si un slot pasa `1/V` segundos volando de cada
+`T_ciclo`, la fracción de la esfera efectivamente puesta en cualquier instante es
+
+```
+aterrizadas / N = 1 - K·R/(V·N)
+```
+
+Con `N=400 K=8 R=60 V=1.5` eso da `1 - 480/600 = 0.20`: la esfera se queda **en el 20% para
+siempre** y lo que se ve es un chorro permanente, nunca una esfera. Por eso el default es
+`0`, y por eso el programa avisa por `stderr` cuando la fracción cae por debajo del 75%.
 
 Que sea función pura de `(i, t)` es lo que hace que la pausa congele la animación sin una
 línea de código extra, que el benchmark pueda arrancar en cualquier instante, y que la
@@ -165,9 +193,11 @@ se recupera el cañón único.
 
 #### K es una perilla de carga ortogonal a N
 
-Es lo que hace útil este modo para el informe. Sin recirculación, K solo aceleraba la rampa
-y el estado final era siempre N. Con recirculación la carga queda **constante en régimen
-permanente**, así que K sube el costo por frame sin tocar la geometría de la esfera:
+Es lo que hace útil este modo para el informe, y **requiere `--recirculate 1`**. Con el
+default, K solo acelera la rampa y el estado final es siempre N — que es justamente lo que
+se quiere ver, pero no da una perilla de carga. Con recirculación la carga queda
+**constante en régimen permanente**, así que K sube el costo por frame sin tocar la
+geometría de la esfera:
 
 ```
 dibujadas = N + (K·R/V) · (L/2)
@@ -185,7 +215,7 @@ Dos detalles que no son obvios y que están verificados contra el código en
   cola —los fantasmas nunca cruzan hacia atrás de su propio disparo— y como
   `delta = vuelo/(L+1)`, la cantidad crece lineal con la fase.
 
-Barrido de K con **N fijo en 400**, `R=60 V=6 L=6` a 1280×720, un hilo:
+Barrido de K con **N fijo en 400**, `--recirculate 1 R=60 V=6 L=6` a 1280×720, un hilo:
 
 | K | dibujadas | ms/frame | sd | FPS |
 |---|---|---|---|---|
@@ -197,8 +227,13 @@ Barrido de K con **N fijo en 400**, `R=60 V=6 L=6` a 1280×720, un hilo:
 
 El ajuste da `costo_ms = 0.199 · dibujadas + 31.8` con **R² = 0.994**: la recta confirma el
 modelo O(P·N). Y las desviaciones estándar de 1–3 ms son la prueba de que el régimen
-permanente existe — sin recirculación el costo por frame crecería muestra a muestra durante
-todo el benchmark y la media dejaría de describir nada.
+permanente existe: la media describe algo real y no el promedio de una rampa.
+
+> Con el default (`--recirculate 0`) el régimen permanente también existe y es más simple
+> —la esfera completa, `dibujadas = N`, cero en vuelo— solo que se llega a él recién
+> después del llenado. `--bench` ya arranca en `t0 = T_ciclo + 1/V`, el primer instante en
+> que todos los índices existen, así que en los dos modos mide régimen permanente y no la
+> rampa.
 
 > **Lo que está adentro se paga pero no se ve.** Una bolita en vuelo por dentro de una
 > esfera ya llena queda tapada por completo por el shell exterior, pero el raycaster igual

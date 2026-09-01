@@ -55,6 +55,7 @@ Config config_defaults(void)
     cfg.cannons      = SS_DEF_CANNONS;
     cfg.cannon_layout= SS_DEF_CANNON_LAYOUT;
     cfg.muzzle_radius= SS_DEF_MUZZLE_RADIUS;
+    cfg.recirculate  = SS_DEF_RECIRCULATE;
 
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
@@ -199,12 +200,28 @@ int config_validate(const Config *cfg)
      * que se avisa y se sigue: la decision es del usuario. */
     if (cfg->cannon && cfg->muzzle_speed > 0.0) {
         double en_vuelo = (double)cfg->cannons * cfg->fire_rate / cfg->muzzle_speed;
-        if (en_vuelo > (double)cfg->n) {
-            fprintf(stderr,
-                    "aviso: K*R/V = %.1f bolitas en vuelo supera N = %d; la esfera\n"
-                    "       no va a llegar a llenarse. Baja --cannons/--fire-rate,\n"
-                    "       sube --muzzle-speed, o subi --n.\n",
-                    en_vuelo, cfg->n);
+
+        /* Sin recirculacion la esfera SIEMPRE termina completa: los indices se
+         * disparan una vez y se quedan. Lo unico que puede pasar es que se
+         * llene tan rapido que no se vea el llenado, y eso no es un problema
+         * que amerite un aviso. Con recirculacion, en cambio, la fraccion
+         * aterrizada en regimen permanente es 1 - K*R/(V*N) y puede quedar
+         * ridiculamente baja sin que nada avise: el umbral viejo era
+         * K*R/V > N, que solo pesca el caso extremo de fraccion <= 0. Con
+         * N=400 K=8 R=60 V=1.5 daba 320 < 400 y no avisaba nada, pero la
+         * esfera se quedaba en el 20% para siempre. */
+        if (cfg->recirculate) {
+            double frac = 1.0 - en_vuelo / (double)cfg->n;
+            if (frac < 0.0) frac = 0.0;
+            if (frac < 0.75) {
+                fprintf(stderr,
+                        "aviso: con --recirculate 1 solo el %.0f%% de la esfera va a estar\n"
+                        "       puesta en regimen permanente (1 - K*R/(V*N), K*R/V = %.1f\n"
+                        "       en vuelo contra N = %d): se ve un chorro, no una esfera.\n"
+                        "       Para verla completa usa --recirculate 0 (el default), o\n"
+                        "       baja --cannons/--fire-rate, o sube --muzzle-speed/--n.\n",
+                        frac * 100.0, en_vuelo, cfg->n);
+            }
         }
     }
 
@@ -268,12 +285,28 @@ void config_print(const Config *cfg)
          * atras de su propio disparo) y la cantidad crece lineal con la fase.
          * Verificado contra el codigo en tests/test_sphere.c, seccion 8. */
         if (cfg->muzzle_speed > 0.0) {
+            double t_llenado =
+                (double)((cfg->n + cfg->cannons - 1) / cfg->cannons) / cfg->fire_rate;
             double en_vuelo = (double)cfg->cannons * cfg->fire_rate / cfg->muzzle_speed;
             if (en_vuelo > (double)cfg->n) en_vuelo = (double)cfg->n;
-            printf("  ciclo / carga     : T_ciclo=%.2f s   en vuelo=%.0f   dibujadas~%.0f\n",
-                   (double)((cfg->n + cfg->cannons - 1) / cfg->cannons) / cfg->fire_rate,
-                   en_vuelo,
-                   (double)cfg->n + en_vuelo * (double)cfg->trail / 2.0);
+
+            if (cfg->recirculate) {
+                printf("  recirculacion     : si  (T_ciclo=%.2f s; la esfera se queda al %.0f%%)\n",
+                       t_llenado,
+                       100.0 * (1.0 - en_vuelo / (double)cfg->n));
+                printf("  carga             : en vuelo=%.0f   dibujadas~%.0f (constante)\n",
+                       en_vuelo,
+                       (double)cfg->n + en_vuelo * (double)cfg->trail / 2.0);
+            } else {
+                /* Sin recirculacion el regimen permanente es la esfera
+                 * COMPLETA: n bolitas aterrizadas y cero en vuelo. El pico de
+                 * carga ocurre durante el llenado, no al final. */
+                printf("  recirculacion     : no  (la esfera se completa en %.2f s y se queda)\n",
+                       t_llenado);
+                printf("  carga             : pico ~%.0f durante el llenado; %d ya completa\n",
+                       (double)cfg->n + en_vuelo * (double)cfg->trail / 2.0,
+                       cfg->n);
+            }
         }
     }
     if (cfg->bench_frames > 0)

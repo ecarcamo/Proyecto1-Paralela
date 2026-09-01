@@ -167,7 +167,9 @@ void args_usage(const char *prog)
 "  --cannons K         canones simultaneos, 1..N           (def %d)\n"
 "  --cannon-layout M   roundrobin | blocks                 (def roundrobin)\n"
 "  --muzzle-radius R0  radio de la esfera de bocas, [0,%.2f] (def %.2f)\n"
-"                      (los slots recirculan: la animacion no se termina)\n"
+"  --recirculate 0|1   0 = aterrizan y se quedan: la esfera se completa\n"
+"                      1 = el slot se redispara cada T_ciclo (carga plana\n"
+"                          para medir, pero la esfera queda al 1-K*R/(V*N))\n"
 "\n"
 "Medicion:\n"
 "  --bench K        mide K frames y termina, 0 = ventana\n"
@@ -344,6 +346,9 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
         }
         else if (strcmp(a, "--cannon") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->cannon) != 0) goto bad;
+        }
+        else if (strcmp(a, "--recirculate") == 0) {
+            if (take_bool(argc, argv, &i, a, &cfg->recirculate) != 0) goto bad;
         }
         else if (strcmp(a, "--vsync") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->vsync) != 0) goto bad;

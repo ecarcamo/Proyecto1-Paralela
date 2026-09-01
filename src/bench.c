@@ -45,13 +45,18 @@ BenchStats bench_run(Framebuffer *fb, SeedSet *s, const Config *cfg)
     const double dt_phys = (1.0 / 60.0 < physics_max_dt(s->n))
                          ? 1.0 / 60.0 : physics_max_dt(s->n);
 
-    /* Con --cannon 1 hay que saltarse el arranque. Con recirculacion la carga
-     * es CONSTANTE en regimen permanente (siempre hay las mismas K*R/V
-     * bolitas en vuelo), asi que ya no hace falta ningun t0 magico para que
-     * media, mediana y sd signifiquen algo: alcanza con no medir el primer
-     * ciclo, mientras los slots todavia no dispararon por primera vez y la
-     * esfera se esta llenando. t0 = T_ciclo + 1/V es el primer instante en el
-     * que ya todos los indices existen. */
+    /* Con --cannon 1 hay que saltarse el llenado: mientras los slots todavia
+     * no dispararon por primera vez, el costo por frame crece muestra a
+     * muestra y la media no describiria nada. t0 = T_ciclo + 1/V es el primer
+     * instante en el que ya todos los indices existen, y sirve para los dos
+     * modos:
+     *
+     *   --recirculate 0  a partir de t0 la esfera esta COMPLETA (n bolitas
+     *                    aterrizadas, cero en vuelo) y se queda asi.
+     *   --recirculate 1  a partir de t0 la carga es constante: siempre las
+     *                    mismas K*R/V bolitas en vuelo.
+     *
+     * En los dos casos lo que se mide es regimen permanente, no la rampa. */
     CannonParams cp = cannon_params_from_config(cfg);
     double t = 0.0;
     if (cfg->cannon) {

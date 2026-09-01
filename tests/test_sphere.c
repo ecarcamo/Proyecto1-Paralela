@@ -252,7 +252,12 @@ static void estimar_n_critico(SeedSet *s)
 
 /* Parametros base de los tests del canon: un solo canon en el origen. Cada
  * test copia esto y cambia lo que le interesa, asi no hay diez literales
- * sueltos repartidos por el archivo. */
+ * sueltos repartidos por el archivo.
+ *
+ * recirculate = 1 y NO el default del programa (0) a proposito: las secciones
+ * 7 y 8 se escribieron para verificar la recirculacion, asi que la piden
+ * explicitamente. El comportamiento por defecto -- aterrizar y quedarse -- lo
+ * cubre la seccion 9, que apaga el flag. */
 static CannonParams cp_base(int n, double R, double V, int L)
 {
     CannonParams p;
@@ -265,6 +270,7 @@ static CannonParams cp_base(int n, double R, double V, int L)
     p.cannons       = 1;
     p.layout        = SS_CANNON_ROUNDROBIN;
     p.muzzle_radius = 0.0;
+    p.recirculate   = 1;
     return p;
 }
 
@@ -796,6 +802,219 @@ static void test_capacidad_k(void)
     seedset_free(&s);
 }
 
+/* ===========================================================================
+ *  9. Modo canon por defecto: --recirculate 0, la esfera se COMPLETA.
+ *
+ *  Esta es la semantica que ve el usuario si no pide nada: N es el tope, los
+ *  canones disparan los N indices una sola vez y cada bolita se queda donde
+ *  aterrizo. Lo que se verifica aca es justo lo que la recirculacion rompia:
+ *  que pasado el tiempo de llenado la esfera este COMPLETA y siga completa.
+ * =========================================================================== */
+
+/* --- 9a. La esfera se completa y se queda completa. ---------------------- */
+static void test_sin_recirculacion_completa(void)
+{
+    const int n = 240, K = 6;
+    const double R = 60.0, V = 4.0;
+
+    CannonParams p = cp_base(n, R, V, /*trail*/0);
+    p.cannons     = K;
+    p.recirculate = 0;
+
+    SeedSet s;
+    if (seedset_alloc(&s, sphere_cannon_capacity(&p)) != 0) {
+        check("Sin recirculacion: reserva de memoria", 0, "seedset_alloc fallo");
+        return;
+    }
+
+    /* Llenado = ultima ronda + el vuelo de esa ultima bolita. */
+    const double t_lleno = (double)cannon_rounds(n, K) / R + 1.0 / V;
+
+    /* Mucho despues del llenado -- incluidos instantes que con recirculacion
+     * caian en pleno rebote -- tienen que estar las n, todas sobre la
+     * superficie. */
+    int completa = 1, todas_en_superficie = 1;
+    double peor_radio = 0.0;
+    const double ts[] = { 1.01, 2.0, 5.0, 50.0, 500.0 };
+
+    for (unsigned k = 0; k < sizeof ts / sizeof *ts; k++) {
+        sphere_fill_cannon(&s, &p, t_lleno * ts[k]);
+        if (s.n != n) completa = 0;
+        for (int i = 0; i < s.n; i++) {
+            double d = fabs(radio_de(&s, i) - 1.0);
+            if (d > peor_radio) peor_radio = d;
+            if (d > 1e-5) todas_en_superficie = 0;
+        }
+    }
+
+    char msg[160];
+    snprintf(msg, sizeof msg,
+             "n=%d K=%d: a 1.01x, 2x, 5x, 50x y 500x el llenado (%.2fs) hay %d/%d, "
+             "error de radio max %.2e", n, K, t_lleno, s.n, n, peor_radio);
+    check("Completitud: sin recirculacion la esfera llega a n y se queda ahi",
+          completa && todas_en_superficie, msg);
+
+    seedset_free(&s);
+}
+
+/* --- 9b. El conteo de aterrizadas nunca retrocede. -----------------------
+ * Con recirculacion esta propiedad NO se cumple: cada T_ciclo el slot vuelve
+ * a la boca y la cuenta de aterrizadas baja. Es exactamente el sintoma de que
+ * la esfera se ve agujereada, escrito como aserto. */
+static void test_sin_recirculacion_monotona(void)
+{
+    const int n = 180, K = 4;
+    const double R = 60.0, V = 3.0;
+
+    CannonParams p = cp_base(n, R, V, /*trail*/0);
+    p.cannons     = K;
+    p.recirculate = 0;
+
+    SeedSet s;
+    if (seedset_alloc(&s, sphere_cannon_capacity(&p)) != 0) {
+        check("Monotonia: reserva de memoria", 0, "seedset_alloc fallo");
+        return;
+    }
+
+    const double t_lleno = (double)cannon_rounds(n, K) / R + 1.0 / V;
+    int monotona = 1, prev = 0, pico = 0;
+
+    for (double t = 0.0; t < 4.0 * t_lleno; t += t_lleno / 400.0) {
+        sphere_fill_cannon(&s, &p, t);
+        int aterrizadas = 0;
+        for (int i = 0; i < s.n; i++)
+            if (radio_de(&s, i) > 1.0 - 1e-6) aterrizadas++;
+        if (aterrizadas < prev) monotona = 0;
+        prev = aterrizadas;
+        if (aterrizadas > pico) pico = aterrizadas;
+    }
+
+    char msg[144];
+    snprintf(msg, sizeof msg,
+             "n=%d K=%d: aterrizadas nunca decrece y termina en %d (pico %d)",
+             n, K, prev, pico);
+    check("Monotonia: una bolita aterrizada no vuelve a salir nunca",
+          monotona && prev == n, msg);
+
+    seedset_free(&s);
+}
+
+/* --- 9c. Antes del primer T_ciclo, recirculate 0 y 1 son identicos. ------
+ * La recirculacion solo puede actuar cuando el fmod envuelve, o sea a partir
+ * de T_ciclo. Antes de eso las dos ramas tienen que dar el MISMO framebuffer
+ * bit a bit: es lo que garantiza que apagar el flag no cambio la construccion
+ * de la esfera, solo lo que pasa despues. */
+static void test_recirculacion_no_altera_el_llenado(void)
+{
+    const int n = 120, K = 5, L = 4;
+    const double R = 60.0, V = 5.0;
+
+    CannonParams p0 = cp_base(n, R, V, L);
+    p0.cannons = K;
+    p0.muzzle_radius = SS_DEF_MUZZLE_RADIUS;
+    p0.recirculate = 0;
+
+    CannonParams p1 = p0;
+    p1.recirculate = 1;
+
+    SeedSet a, b;
+    if (seedset_alloc(&a, sphere_cannon_capacity(&p0)) != 0 ||
+        seedset_alloc(&b, sphere_cannon_capacity(&p1)) != 0) {
+        check("Llenado identico: reserva de memoria", 0, "seedset_alloc fallo");
+        return;
+    }
+
+    const double t_ciclo = (double)cannon_rounds(n, K) / R;
+    int identico = 1, instantes = 0;
+    double peor = 0.0;
+
+    for (double t = 0.0; t < t_ciclo; t += t_ciclo / 200.0) {
+        sphere_fill_cannon(&a, &p0, t);
+        sphere_fill_cannon(&b, &p1, t);
+        instantes++;
+        if (a.n != b.n) { identico = 0; break; }
+        for (int i = 0; i < a.n; i++) {
+            double d = fabs((double)a.x[i] - b.x[i])
+                     + fabs((double)a.y[i] - b.y[i])
+                     + fabs((double)a.z[i] - b.z[i]);
+            if (d > peor) peor = d;
+            if (d != 0.0) identico = 0;
+        }
+    }
+
+    char msg[144];
+    snprintf(msg, sizeof msg,
+             "%d instantes en [0, T_ciclo), desviacion max %.2e", instantes, peor);
+    check("Llenado: apagar la recirculacion no cambia el primer ciclo bit a bit",
+          identico, msg);
+
+    seedset_free(&a);
+    seedset_free(&b);
+}
+
+/* --- 9d. Con r0 = 0 toda bolita en vuelo sale del centro hacia afuera. ---
+ * O sea: su posicion es COLINEAL con su destino de Fibonacci y apunta en el
+ * mismo sentido. Es la propiedad que se pide de verdad -- "las bolitas salen
+ * del centro y forman la esfera" -- escrita como aserto y no como una captura
+ * de pantalla. */
+static void test_vuelo_radial_desde_el_centro(void)
+{
+    const int n = 150, K = 3;
+    const double R = 40.0, V = 2.0;
+
+    CannonParams p = cp_base(n, R, V, /*trail*/0);
+    p.cannons       = K;
+    p.muzzle_radius = 0.0;             /* todas las bocas en el origen */
+    p.recirculate   = 0;
+
+    SeedSet s;
+    if (seedset_alloc(&s, sphere_cannon_capacity(&p)) != 0) {
+        check("Vuelo radial: reserva de memoria", 0, "seedset_alloc fallo");
+        return;
+    }
+
+    const double t_lleno = (double)cannon_rounds(n, K) / R + 1.0 / V;
+    int radial = 1, vistas_en_vuelo = 0;
+    double peor_cruz = 0.0, peor_radio = 0.0;
+
+    for (double t = 0.0; t < t_lleno; t += t_lleno / 300.0) {
+        sphere_fill_cannon(&s, &p, t);
+
+        /* Cada slot escrito tiene que caer sobre el rayo origen->destino de
+         * ALGUN indice. Se busca el destino mas alineado y se exige que el
+         * producto cruz sea nulo: eso es "va derecho hacia afuera". */
+        for (int i = 0; i < s.n; i++) {
+            double r = radio_de(&s, i);
+            if (r < 1e-9) continue;                 /* recien salida del centro */
+            if (r > 1.0 - 1e-6) continue;           /* ya aterrizo */
+            vistas_en_vuelo++;
+
+            double mejor = 1e9;
+            for (int j = 0; j < n; j++) {
+                Vec3 d = sphere_dir_fib(j, n, SS_GOLDEN_ANG);
+                /* |p x d| / |p| : distancia angular al rayo del destino j */
+                double cx = (double)s.y[i]*d.z - (double)s.z[i]*d.y;
+                double cy = (double)s.z[i]*d.x - (double)s.x[i]*d.z;
+                double cz = (double)s.x[i]*d.y - (double)s.y[i]*d.x;
+                double cruz = sqrt(cx*cx + cy*cy + cz*cz) / r;
+                if (cruz < mejor) mejor = cruz;
+            }
+            if (mejor > peor_cruz) peor_cruz = mejor;
+            if (mejor > 1e-5) radial = 0;
+            if (r > peor_radio) peor_radio = r;
+        }
+    }
+
+    char msg[176];
+    snprintf(msg, sizeof msg,
+             "%d muestras en vuelo, desalineacion max %.2e, radio max en vuelo %.4f",
+             vistas_en_vuelo, peor_cruz, peor_radio);
+    check("Vuelo: con r0 = 0 toda bolita viaja del centro hacia su lugar",
+          radial && vistas_en_vuelo > 0, msg);
+
+    seedset_free(&s);
+}
+
 /* =========================================================================== */
 
 int main(int argc, char **argv)
@@ -845,7 +1064,7 @@ int main(int argc, char **argv)
     printf("\n 7. Modo canon (Plan 1: formula cerrada)\n");
     test_cannon();
 
-    printf("\n 8. Modo canon (Plan 2: K canones, animacion infinita)\n");
+    printf("\n 8. Modo canon (Plan 2: K canones, recirculacion opcional)\n");
     test_k1_no_regresion();
     test_cobertura(SS_CANNON_ROUNDROBIN, "round-robin");
     test_cobertura(SS_CANNON_BLOCKS,     "bloques contiguos");
@@ -853,6 +1072,12 @@ int main(int argc, char **argv)
     test_bocas();
     test_estela_no_recircula();
     test_capacidad_k();
+
+    printf("\n 9. Modo canon por defecto (--recirculate 0: la esfera se completa)\n");
+    test_sin_recirculacion_completa();
+    test_sin_recirculacion_monotona();
+    test_recirculacion_no_altera_el_llenado();
+    test_vuelo_radial_desde_el_centro();
 
     seedset_free(&s);
 

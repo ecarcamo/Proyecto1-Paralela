@@ -99,29 +99,47 @@
 #define SS_DEF_TRAIL         6       /* fantasmas de estela por bolita en vuelo */
 
 /* --------------------------------------------------------------------------
- *  Modo canon, segunda parte: K canones y animacion infinita.
+ *  Modo canon, segunda parte: K canones y recirculacion opcional.
  *
- *  Con un solo canon y sin recirculacion la animacion TIENE FINAL: cuando
- *  aterriza la bolita N queda una esfera estatica y no pasa nada mas. Con K
- *  canones eso empeora, porque se llena K veces mas rapido. Por eso el slot i
- *  no se queda quieto para siempre: se vuelve a disparar cada T_ciclo
- *  segundos (ver sphere_fill_cannon()). La esfera se mantiene llena, los
- *  canones no paran nunca, y la formula sigue siendo cerrada -- solo se le
- *  agrega un fmod.
+ *  N es el TOPE de la esfera, no un punto de partida: los canones disparan
+ *  los N indices del patron y ahi se acaba el reparto. Esa es la unica
+ *  semantica que deja medir, porque N es el parametro de carga del enunciado
+ *  y el patron de Fibonacci depende de N en TODOS sus puntos --
+ *  sphere_dir_fib() reparte areas con z = 1 - 2(i+1/2)/n, asi que mover n
+ *  reubica cada semilla ya colocada, no agrega una al final.
  *
- *  Efecto lateral que importa para el informe: con recirculacion la carga
- *  dibujada es CONSTANTE en regimen permanente, asi que K pasa a ser una
- *  perilla de carga de verdad, ortogonal a N. Se puede subir el costo por
- *  frame sin tocar la geometria de la esfera.
+ *  --recirculate elige que pasa DESPUES de que aterriza la ultima:
  *
- *  El default de K es 1 para que el modo canon se siga viendo igual que
- *  antes salvo por la recirculacion, y el radio de boca es > 0 porque con
- *  todas las bocas en el origen exacto las bolitas recien disparadas se
- *  apilan y se solapan feo (y con K > 1 los canones no se distinguirian).
+ *    0 (default)  el slot i aterriza y se queda. La esfera se completa a los
+ *                 techo(N/K)/R segundos y se queda completa: N bolitas
+ *                 firmes. Es lo que se quiere ver -- la esfera construida a
+ *                 canonazos. La animacion no muere: siguen el giro (--rot) y
+ *                 la deriva de color (--color-speed).
+ *
+ *    1            el slot i se vuelve a disparar cada T_ciclo segundos (un
+ *                 fmod sobre la edad). Sirve para el informe: la carga
+ *                 dibujada queda CONSTANTE en regimen permanente y K pasa a
+ *                 ser una perilla de carga ortogonal a N.
+ *
+ *  Por que el default es 0: con recirculacion la esfera NO se mantiene llena.
+ *  La fraccion aterrizada en regimen permanente es
+ *
+ *        aterrizadas / N = 1 - K*R/(V*N)
+ *
+ *  porque cada slot pasa 1/V segundos volando de cada T_ciclo = techo(N/K)/R.
+ *  Con los valores que documentaba el README (N=400 K=8 R=60 V=1.5) eso da
+ *  1 - 480/600 = 0.20: la esfera se queda en el 20% para siempre y lo que se
+ *  ve es un chorro permanente, nunca una esfera. La recirculacion sigue
+ *  disponible, pero pedida a proposito y no de arranque.
+ *
+ *  El default de K es 1, y el radio de boca es > 0 porque con todas las bocas
+ *  en el origen exacto las bolitas recien disparadas se apilan y se solapan
+ *  feo (y con K > 1 los canones no se distinguirian).
  * -------------------------------------------------------------------------- */
 #define SS_DEF_CANNONS       1       /* --cannons K: canones simultaneos      */
 #define SS_DEF_MUZZLE_RADIUS 0.12    /* --muzzle-radius r0: donde estan las bocas */
 #define SS_MUZZLE_RADIUS_MAX 0.95    /* r0 >= 1 dispararia desde afuera       */
+#define SS_DEF_RECIRCULATE   0       /* --recirculate: 0 = aterrizan y se quedan */
 
 /* Reparto de indices entre los K canones (--cannon-layout).
  *
@@ -173,6 +191,7 @@ typedef struct {
     int      cannons;       /* --cannons     K canones simultaneos (>= 1)    */
     int      cannon_layout; /* --cannon-layout  SS_CANNON_ROUNDROBIN|BLOCKS  */
     double   muzzle_radius; /* --muzzle-radius  radio de la esfera de bocas  */
+    int      recirculate;   /* --recirculate 0|1  0 = aterrizan y se quedan  */
 
     /* --- modo medicion ------------------------------------------------ */
     int      bench_frames;  /* --bench K  0 = modo ventana normal            */

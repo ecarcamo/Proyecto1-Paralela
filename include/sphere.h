@@ -124,6 +124,15 @@ typedef struct {
     int      cannons;       /* K: canones simultaneos (>= 1)                 */
     int      layout;        /* SS_CANNON_ROUNDROBIN o SS_CANNON_BLOCKS       */
     double   muzzle_radius; /* r0: radio de la esfera chica de bocas, [0, 1) */
+
+    /* Que pasa cuando el slot i ya aterrizo:
+     *   0  se queda ahi para siempre. La esfera se COMPLETA a los
+     *      techo(n/K)/R segundos y se queda en n bolitas firmes.
+     *   1  se vuelve a disparar cada T_ciclo (un fmod sobre la edad): la
+     *      carga queda constante en regimen permanente, a costa de que solo
+     *      una fraccion 1 - K*R/(V*n) de la esfera este puesta en cualquier
+     *      instante. Ver el bloque de --recirculate en config.h. */
+    int      recirculate;
 } CannonParams;
 
 /* Copia de Config los campos que le importan al canon. Es el unico puente

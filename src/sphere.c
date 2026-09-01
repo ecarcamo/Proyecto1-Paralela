@@ -139,6 +139,7 @@ CannonParams cannon_params_from_config(const Config *cfg)
     p.cannons       = cfg->cannons;
     p.layout        = cfg->cannon_layout;
     p.muzzle_radius = cfg->muzzle_radius;
+    p.recirculate   = cfg->recirculate;
     return p;
 }
 
@@ -241,12 +242,20 @@ static double cannon_trail_delta(double muzzle_speed, int trail)
     return (1.0 / muzzle_speed) / (double)(trail + 1);
 }
 
-/* Fase del indice i en el instante t: cuanto hace que salio del canon, ya
- * envuelta al periodo de recirculacion.
+/* Fase del indice i en el instante t: cuanto hace que salio del canon.
  *
  * Devuelve 0 si la bolita todavia no tuvo su primer disparo (t < t_disparo);
  * en ese caso *fase_out queda sin tocar. A partir del primer disparo la
- * bolita ya nunca deja de existir: cicla.  */
+ * bolita ya nunca deja de existir.
+ *
+ * Con recirculate = 0 (el default) la fase es la edad cruda y crece sin
+ * techo: cannon_pos_at_phase() satura el radio en 1, asi que la bolita
+ * aterriza y se queda. Es lo que hace que la esfera se COMPLETE y se quede
+ * completa en n bolitas.
+ *
+ * Con recirculate = 1 se envuelve al periodo T_ciclo y el slot vuelve a
+ * salir de la boca: carga constante para medir, pero solo una fraccion
+ * 1 - K*R/(V*n) de la esfera puesta en cualquier instante. */
 static int cannon_phase(int i, const CannonParams *p, double t_ciclo, double t,
                         double *fase_out)
 {
@@ -257,11 +266,15 @@ static int cannon_phase(int i, const CannonParams *p, double t_ciclo, double t,
     double edad = t - t_disparo;
     if (edad < 0.0) return 0;                     /* todavia no se disparo */
 
-    /* La recirculacion entera es este fmod: pasado T_ciclo, el slot vuelve a
-     * salir de la boca. fmod de un no-negativo es no-negativo, pero se
-     * envuelve igual por si el redondeo devuelve algo apenas < 0. */
-    double fase = fmod(edad, t_ciclo);
-    if (fase < 0.0) fase += t_ciclo;
+    double fase = edad;
+
+    if (p->recirculate) {
+        /* La recirculacion entera es este fmod. fmod de un no-negativo es
+         * no-negativo, pero se envuelve igual por si el redondeo devuelve
+         * algo apenas < 0. */
+        fase = fmod(edad, t_ciclo);
+        if (fase < 0.0) fase += t_ciclo;
+    }
 
     *fase_out = fase;
     return 1;
