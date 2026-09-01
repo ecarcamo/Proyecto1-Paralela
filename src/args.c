@@ -48,31 +48,6 @@ static int parse_long(const char *s, const char *opt, long *out)
     return 0;
 }
 
-static int parse_ull(const char *s, const char *opt, unsigned long long *out)
-{
-    if (s == NULL || *s == '\0') {
-        fprintf(stderr, "error: la opcion %s recibio un valor vacio\n", opt);
-        return -1;
-    }
-
-    errno = 0;
-    char *end = NULL;
-    unsigned long long v = strtoull(s, &end, 10);
-
-    if (end == s || *end != '\0') {
-        fprintf(stderr, "error: la opcion %s espera un entero sin signo, se recibio '%s'\n",
-                opt, s);
-        return -1;
-    }
-    if (errno == ERANGE) {
-        fprintf(stderr, "error: la opcion %s: '%s' desborda el rango\n", opt, s);
-        return -1;
-    }
-
-    *out = v;
-    return 0;
-}
-
 static int parse_double(const char *s, const char *opt, double *out)
 {
     if (s == NULL || *s == '\0') {
@@ -140,19 +115,11 @@ void args_usage(const char *prog)
 "Parametro principal:\n"
 "  --n N            semillas sobre la esfera        (def %d, 1..%d)\n"
 "\n"
-"Canvas:\n"
-"  --width W        ancho en pixeles                (def %d, min %d)\n"
-"  --height H       alto  en pixeles                (def %d, min %d)\n"
-"\n"
-"Geometria y apariencia:\n"
+"Geometria:\n"
 "  --angle GRADOS   angulo de divergencia en GRADOS (def aureo ~137.508)\n"
-"  --rot RAD_S      velocidad de giro en rad/s       (def %.2f)\n"
-"  --fill FRAC      fraccion de pantalla (0,1]       (def %.2f)\n"
-"  --seed S         semilla del PRNG de colores       (def %llu)\n"
 "\n"
-"Deriva de color (las semillas ya colocadas cambian de tono con el tiempo):\n"
-"  --color-speed V  vueltas de tono por segundo       (def %.2f, 0 = fijo)\n"
-"  --color-spread F dispersion del ritmo entre semillas 0..1 (def %.2f)\n"
+"  El canvas (%dx%d), el giro, el encuadre, la semilla del PRNG y la deriva\n"
+"  de color son fijos: son la identidad visual del screensaver, no perillas.\n"
 "\n"
 "Kernels:\n"
 "  --physics 0|1    repulsion Douady-Couder          (def 0)\n"
@@ -160,11 +127,11 @@ void args_usage(const char *prog)
 "  --raster 0|1     bolitas rasterizadas: plan B barato, NO escala con N\n"
 "\n"
 "Canon (la esfera se construye a canonazos; incompatible con --physics):\n"
-"  --cannon 0|1        enciende el modo canon             (def 0)\n"
+"  --cannons K         K canones, 1..N. SIN esta bandera (o con 0) el modo\n"
+"                      canon esta apagado y la esfera aparece ya hecha.\n"
 "  --fire-rate R       disparos por segundo               (def %.1f)\n"
 "  --muzzle-speed V    radios por segundo (vuelo dura 1/V) (def %.2f)\n"
 "  --trail L           fantasmas de estela por bolita      (def %d)\n"
-"  --cannons K         canones simultaneos, 1..N           (def %d)\n"
 "  --cannon-layout M   roundrobin | blocks                 (def roundrobin)\n"
 "  --muzzle-radius R0  radio de la esfera de bocas, [0,%.2f] (def %.2f)\n"
 "  --recirculate 0|1   0 = aterrizan y se quedan: la esfera se completa\n"
@@ -182,17 +149,10 @@ void args_usage(const char *prog)
 "Teclas en la ventana: ESC/Q salir, [ ] barren el angulo, P pausa, R reinicia.\n",
         prog,
         SS_DEF_N, SS_N_MAX,
-        SS_DEF_WIDTH, SS_WIDTH_MIN,
-        SS_DEF_HEIGHT, SS_HEIGHT_MIN,
-        SS_DEF_ROT_SPEED,
-        SS_DEF_FILL,
-        (unsigned long long)SS_DEF_SEED,
-        SS_DEF_COLOR_SPEED,
-        SS_DEF_COLOR_SPREAD,
+        SS_DEF_WIDTH, SS_DEF_HEIGHT,
         SS_DEF_FIRE_RATE,
         SS_DEF_MUZZLE_SPEED,
         SS_DEF_TRAIL,
-        SS_DEF_CANNONS,
         SS_MUZZLE_RADIUS_MAX,
         SS_DEF_MUZZLE_RADIUS);
 }
@@ -228,18 +188,6 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
             cfg->n = (int)v;
         }
-        else if (strcmp(a, "--width") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            long v;
-            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
-            cfg->width = (int)v;
-        }
-        else if (strcmp(a, "--height") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            long v;
-            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
-            cfg->height = (int)v;
-        }
         else if (strcmp(a, "--bench") == 0) {
             const char *s = take_value(argc, argv, &i, a);
             long v;
@@ -265,31 +213,6 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             double deg;
             if (s == NULL || parse_double(s, a, &deg) != 0) goto bad;
             cfg->angle_rad = deg * SS_PI / 180.0;
-        }
-        else if (strcmp(a, "--rot") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            double v;
-            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
-            cfg->rot_speed = v;
-        }
-        else if (strcmp(a, "--fill") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            double v;
-            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
-            cfg->sphere_frac = v;
-        }
-
-        else if (strcmp(a, "--color-speed") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            double v;
-            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
-            cfg->color_speed = v;
-        }
-        else if (strcmp(a, "--color-spread") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            double v;
-            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
-            cfg->color_spread = v;
         }
         else if (strcmp(a, "--fire-rate") == 0) {
             const char *s = take_value(argc, argv, &i, a);
@@ -327,13 +250,6 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
         }
 
         /* --- sin signo de 64 bits --------------------------------------- */
-        else if (strcmp(a, "--seed") == 0) {
-            const char *s = take_value(argc, argv, &i, a);
-            unsigned long long v;
-            if (s == NULL || parse_ull(s, a, &v) != 0) goto bad;
-            cfg->seed = (uint64_t)v;
-        }
-
         /* --- booleanos 0|1 ---------------------------------------------- */
         else if (strcmp(a, "--physics") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->physics) != 0) goto bad;
@@ -343,9 +259,6 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
         }
         else if (strcmp(a, "--raster") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->raster) != 0) goto bad;
-        }
-        else if (strcmp(a, "--cannon") == 0) {
-            if (take_bool(argc, argv, &i, a, &cfg->cannon) != 0) goto bad;
         }
         else if (strcmp(a, "--recirculate") == 0) {
             if (take_bool(argc, argv, &i, a, &cfg->recirculate) != 0) goto bad;
@@ -360,6 +273,15 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             goto bad;
         }
     }
+
+    /* El modo canon no tiene bandera propia: lo enciende --cannons. Aca es
+     * donde el K que escribio el usuario se convierte en el booleano interno
+     * que consultan main.c, bench.c y config.c. Se deriva UNA vez, al final
+     * del parseo, para que no haya forma de que cannon y cannons queden
+     * diciendo cosas distintas.
+     *
+     * K negativo no se corrige en silencio: config_validate() lo rechaza. */
+    cfg->cannon = (cfg->cannons >= 1);
 
     return ARGS_OK;
 

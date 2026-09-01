@@ -45,7 +45,7 @@ BenchStats bench_run(Framebuffer *fb, SeedSet *s, const Config *cfg)
     const double dt_phys = (1.0 / 60.0 < physics_max_dt(s->n))
                          ? 1.0 / 60.0 : physics_max_dt(s->n);
 
-    /* Con --cannon 1 hay que saltarse el llenado: mientras los slots todavia
+    /* Con --cannons K hay que saltarse el llenado: mientras los slots todavia
      * no dispararon por primera vez, el costo por frame crece muestra a
      * muestra y la media no describiria nada. t0 = T_ciclo + 1/V es el primer
      * instante en el que ya todos los indices existen, y sirve para los dos

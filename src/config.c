@@ -47,7 +47,8 @@ Config config_defaults(void)
      * comentario largo de render_balls_raycast(). */
     cfg.raster       = 0;
 
-    /* Apagado por defecto: es una demo aparte, se enciende con --cannon 1. */
+    /* Derivado de cannons al final de args_parse(). Aca solo tiene que ser
+     * coherente con SS_DEF_CANNONS = 0: sin canones, modo apagado. */
     cfg.cannon       = 0;
     cfg.fire_rate    = SS_DEF_FIRE_RATE;
     cfg.muzzle_speed = SS_DEF_MUZZLE_SPEED;
@@ -89,45 +90,18 @@ int config_validate(const Config *cfg)
         return -3;
     }
 
-    /* --- Canvas: el enunciado exige un minimo de 640x480 --------------- */
-    if (cfg->width < SS_WIDTH_MIN || cfg->height < SS_HEIGHT_MIN) {
-        fprintf(stderr,
-                "error: el canvas minimo es %dx%d (se recibio %dx%d)\n",
-                SS_WIDTH_MIN, SS_HEIGHT_MIN, cfg->width, cfg->height);
-        return -4;
-    }
-    if (cfg->width > SS_DIM_MAX || cfg->height > SS_DIM_MAX) {
-        fprintf(stderr, "error: el canvas maximo es %dx%d\n",
-                SS_DIM_MAX, SS_DIM_MAX);
-        return -5;
-    }
-
-    /* --- Geometria ----------------------------------------------------- */
-    if (cfg->sphere_frac <= 0.0 || cfg->sphere_frac > 1.0) {
-        fprintf(stderr, "error: --fill debe estar en (0, 1] (se recibio %.3f)\n",
-                cfg->sphere_frac);
-        return -6;
-    }
-
-    /* --- Deriva de color ----------------------------------------------
-     * El signo se permite (invierte el sentido del recorrido del tono); lo que
-     * se acota es la MAGNITUD: mas de SS_COLOR_SPEED_MAX vueltas por segundo
-     * ya no es una transicion gradual sino un parpadeo de colores saturados a
-     * pantalla completa, que ademas de verse mal es un riesgo real para gente
-     * fotosensible. */
-    if (!(fabs(cfg->color_speed) <= SS_COLOR_SPEED_MAX)) {
-        fprintf(stderr,
-                "error: --color-speed debe estar en [-%.1f, %.1f] vueltas/s\n"
-                "       (se recibio %.3f). Usa 0 para dejar el color fijo.\n",
-                SS_COLOR_SPEED_MAX, SS_COLOR_SPEED_MAX, cfg->color_speed);
-        return -8;
-    }
-    if (!(cfg->color_spread >= 0.0 && cfg->color_spread <= 1.0)) {
-        fprintf(stderr,
-                "error: --color-spread debe estar en [0, 1] (se recibio %.3f)\n",
-                cfg->color_spread);
-        return -9;
-    }
+    /* --- Canvas, encuadre y color: ya no se validan aca -----------------
+     * width, height, sphere_frac, color_speed y color_spread perdieron su
+     * bandera: los fija config_default() desde los SS_DEF_* y no hay camino
+     * por el que el usuario les meta un valor. Validarlos seria codigo
+     * inalcanzable, y peor: los mensajes nombraban --fill, --color-speed y
+     * --color-spread, banderas que ya no existen.
+     *
+     * Los invariantes que esas ramas cuidaban (canvas >= 640x480 del
+     * enunciado, encuadre en (0,1], magnitud del tono acotada por seguridad
+     * fotosensible) siguen valiendo por construccion: se leen directamente de
+     * las constantes en config.h. Si alguna vuelve a ser configurable, vuelve
+     * su validacion con ella. */
 
     if (cfg->bench_frames < 0) {
         fprintf(stderr, "error: --bench debe ser >= 0\n");
@@ -142,7 +116,7 @@ int config_validate(const Config *cfg)
      * de entrada: mas simple, mas explicito, sin sorpresas. */
     if (cfg->cannon && cfg->physics) {
         fprintf(stderr,
-                "error: --cannon y --physics no se pueden usar juntos: la\n"
+                "error: --cannons y --physics no se pueden usar juntos: la\n"
                 "       repulsion asume que las semillas ya estan sobre la\n"
                 "       esfera, y en pleno vuelo no lo estan.\n");
         return -10;
@@ -162,11 +136,18 @@ int config_validate(const Config *cfg)
                 cfg->trail);
         return -13;
     }
-    /* K canones: al menos uno, y no mas que indices para repartir. Con K > N
-     * habria canones sin un solo indice asignado: no es un error sutil, es
-     * pedir algo que no existe. */
-    if (cfg->cannon && cfg->cannons < 1) {
-        fprintf(stderr, "error: --cannons debe ser >= 1 (se recibio %d)\n",
+    /* K canones: no mas que indices para repartir. Con K > N habria canones
+     * sin un solo indice asignado: no es un error sutil, es pedir algo que no
+     * existe.
+     *
+     * El caso K < 1 se chequea SIEMPRE, no solo con el modo encendido: K = 0
+     * es "sin canones" y es legitimo, pero K negativo es un error de tipeo que
+     * no se puede interpretar como apagar el modo. Va aca y no dentro del
+     * if (cfg->cannon) porque con K negativo cannon ya vale 0 y el guardia
+     * dejaria pasar el disparate en silencio. */
+    if (cfg->cannons < 0) {
+        fprintf(stderr, "error: --cannons debe ser >= 0 (se recibio %d);\n"
+                        "       0 apaga el modo canon, K >= 1 lo enciende.\n",
                 cfg->cannons);
         return -14;
     }

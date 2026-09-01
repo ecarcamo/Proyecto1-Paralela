@@ -73,23 +73,15 @@ que adivinar.
 | Opción | Descripción | Por defecto |
 |---|---|---|
 | `--n <int>` | **Semillas sobre la esfera** (el parámetro N del enunciado) | 128 |
-| `--width <int>` | Ancho del canvas (mínimo 640) | 1280 |
-| `--height <int>` | Alto del canvas (mínimo 480) | 720 |
 | `--angle <grados>` | Ángulo de divergencia | 137.50776 |
-| `--rot <rad/s>` | Velocidad de giro de la esfera (0 = quieta) | 0.35 |
-| `--fill <frac>` | Fracción de pantalla que ocupa la esfera, (0, 1] | 0.84 |
-| `--seed <uint>` | Semilla del PRNG (determinista) | 12345 |
-| `--color-speed <v>` | Vueltas del círculo de tono por segundo (0 = color fijo) | 0.06 |
-| `--color-spread <f>` | Dispersión de ese ritmo entre semillas, 0..1 | 0.65 |
-| `--physics <0\|1>` | Repulsión tipo Douady–Couder (incompatible con `--cannon 1`) | 0 |
+| `--physics <0\|1>` | Repulsión tipo Douady–Couder (incompatible con `--cannons`) | 0 |
 | `--voronoi <0\|1>` | Celdas de Voronoi vs. bolitas | 0 |
 | `--raster <0\|1>` | Bolitas rasterizadas (plan B barato, **no escala con N**) | 0 |
-| `--cannon <0\|1>` | Modo cañón: la esfera se construye a cañonazos | 0 |
-| `--cannons <K>` | Cañones simultáneos, 1..N | 1 |
+| `--cannons <K>` | **Enciende el modo cañón** con K cañones, 1..N. Sin la bandera (o con `0`) la esfera aparece ya hecha | 0 |
 | `--cannon-layout <m>` | Reparto de índices: `roundrobin` o `blocks` | roundrobin |
-| `--fire-rate <R>` | Disparos por segundo, **por cañón** | 60 |
-| `--muzzle-speed <V>` | Radios por segundo; el vuelo dura `1/V` | 1.5 |
-| `--muzzle-radius <r0>` | Radio de la esfera chica donde están las bocas, [0, 0.95] | 0.12 |
+| `--fire-rate <R>` | Disparos por segundo, **por cañón**. Fija cuánto dura el llenado: `techo(N/K)/R` | 60 |
+| `--muzzle-speed <V>` | Radios por segundo; el vuelo de cada bolita dura `1/V` | 1.5 |
+| `--muzzle-radius <r0>` | Radio de la esfera chica donde están las bocas, [0, 0.95]. En `0` salen del centro exacto | 0.12 |
 | `--recirculate <0\|1>` | `0`: aterrizan y se quedan (la esfera se completa). `1`: se redisparan | 0 |
 | `--trail <L>` | Fantasmas de estela por bolita en vuelo | 6 |
 | `--bench <K>` | Corre K frames sin ventana y reporta tiempos | 0 |
@@ -98,10 +90,32 @@ que adivinar.
 | `--csv` | Salida en CSV para graficar | off |
 | `--help` / `-h` | Ayuda | |
 
-> Son **25 banderas** y la lista de arriba es exactamente la que acepta el parser
-> (`src/args.c`). `--threads` **no existe todavía**: aparecía en esta tabla pero el binario
-> la rechaza con `opcion desconocida`. Va a entrar junto con `bin/screensaver_omp` y
-> `make omp`, que tampoco existen — ver la sección **Estado** al final.
+Son **17 banderas**, y la lista de arriba es exactamente la que acepta el parser
+(`src/args.c`) — ni una de más ni una de menos.
+
+**Lo que NO es configurable, a propósito.** El canvas (1280×720), la velocidad de giro, el
+encuadre, la semilla del PRNG y la deriva de color son fijos: son la identidad visual del
+screensaver, no perillas. Dejarlos quietos además hace que toda medición salga a la misma
+resolución sin tener que acordarse de pasarla, que es justo lo que el informe necesita.
+
+> `--threads` **no existe todavía** — va a entrar junto con `bin/screensaver_omp` y
+> `make omp`, que tampoco existen. Ver la sección **Estado** al final.
+
+### Por qué no hay un `--cannon 0|1`
+
+El modo cañón se enciende con `--cannons` y nada más. Tener las dos banderas obligaba a
+escribir `--cannon 1 --cannons 1` para decir una sola cosa, y dejaba pasar combinaciones sin
+sentido como `--cannon 0 --cannons 8`. Ahora el número *es* el interruptor:
+
+```bash
+./bin/screensaver_seq --n 400                 # sin cañones: la esfera aparece hecha
+./bin/screensaver_seq --n 400 --cannons 1     # un cañón
+./bin/screensaver_seq --n 400 --cannons 8     # ocho
+./bin/screensaver_seq --n 400 --cannons 0     # explícitamente apagado
+```
+
+`--cannons` negativo se rechaza: `0` significa apagar, pero un negativo es un error de
+tipeo y no se interpreta en silencio.
 
 ### Los tres kernels y su costo
 
@@ -139,15 +153,15 @@ pasa a ser exacta por píxel.
 
 ### Modo cañón
 
-Con `--cannon 1` la esfera no aparece hecha: arranca vacía y **K cañones la construyen
+Con `--cannons K` la esfera no aparece hecha: arranca vacía y **K cañones la construyen
 delante del público**, disparando una bolita por ronda hacia su posición del patrón áureo.
 El disparo *i* aterriza exactamente en la posición *i* de Fibonacci, así que todo lo que se
 dispara se ve y se queda, y la esfera se densifica de verdad mientras el contador de FPS
 cae en vivo.
 
 ```bash
-./bin/screensaver_seq --n 400 --cannon 1 --cannons 8 --trail 6   # ocho chorros
-./bin/screensaver_seq --n 400 --cannon 1 --cannons 4 --cannon-layout blocks
+./bin/screensaver_seq --n 400 --cannons 8 --trail 6              # ocho chorros
+./bin/screensaver_seq --n 400 --cannons 4 --cannon-layout blocks
 ```
 
 **N es el tope de la esfera, no un punto de partida.** Los cañones reparten los `N` índices
@@ -158,7 +172,7 @@ el patrón de Fibonacci depende de `N` en *todos* sus puntos (`z = 1 - 2(i+½)/N
 subir `N` en vivo no agregaría una semilla al final: reubicaría a las que ya están.
 
 Que la esfera se complete no significa que la animación muera: siguen el giro (`--rot`) y
-la deriva de color (`--color-speed`).
+la deriva de color, que son fijos.
 
 Todo es función cerrada de `(i, t)` — sin estado que integrar, sin historial de partículas:
 
@@ -256,16 +270,14 @@ cubre superficie. `--raster 1` funciona sin tocar nada.
 
 Las semillas que ya están sobre la esfera no se quedan con el color con el que
 nacieron: su **tono recorre el círculo HSV** con el tiempo, cada una a su propio
-ritmo (`--color-spread`), y la saturación late hacia arriba — nunca hacia el gris —
+ritmo, y la saturación late hacia arriba — nunca hacia el gris —
 así la esfera se ve **más saturada** y se va poblando de tonos distintos en vez de
 cambiar en bloque como un filtro encima.
 
-```bash
-./bin/screensaver_seq                       # deriva suave (una vuelta cada ~17 s)
-./bin/screensaver_seq --color-speed 0.4     # notoria, buena para la demo
-./bin/screensaver_seq --color-speed 0       # el comportamiento anterior: color fijo
-./bin/screensaver_seq --color-spread 0      # todas al mismo ritmo: la paleta gira entera
-```
+Los dos valores son **fijos**: 0.06 vueltas de tono por segundo (una vuelta completa cada
+~17 s, lento como para leerse como transición y no como parpadeo) y 0.65 de dispersión
+entre semillas. Se ajustan en `SS_DEF_COLOR_SPEED` y `SS_DEF_COLOR_SPREAD`
+([include/config.h](include/config.h)), no por línea de comandos.
 
 El color **no se guarda ni se acumula**: se recalcula cada frame como una función pura
 `color(i, seed, t)`, igual que `color_for_seed()`. Eso es deliberado — mantiene el

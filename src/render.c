@@ -201,7 +201,7 @@ static float ball_world_radius(int n)
  *  perdido en el ruido; y es un bucle sin dependencias, asi que cuando se
  *  paralelice acepta un 'parallel for' directo.
  *
- *  Devuelve NULL cuando no hay nada que animar (--color-speed 0) o si falla el
+ *  Devuelve NULL cuando no hay nada que animar (deriva de color en 0) o si falla el
  *  malloc; en ambos casos el llamador cae de vuelta en s->color[], que es
  *  exactamente el mismo color con t = 0.
  * ========================================================================== */
@@ -404,7 +404,7 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
  *  pisarlos aca romperia la integracion de Verlet entre frames.
  * ========================================================================== */
 /* 'rr' es opcional (puede ser NULL): solo hace falta cuando alguna semilla
- * puede NO estar sobre la esfera unitaria (modo --cannon, bolitas en pleno
+ * puede NO estar sobre la esfera unitaria (modo canon, bolitas en pleno
  * vuelo). Cuando es NULL no se calcula nada extra -- el resto de los modos
  * no pagan este costo si nunca lo necesitan. */
 static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float ctx,
@@ -485,7 +485,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
              * geodesica (que pediria acos): son equivalentes porque acos es
              * monotona decreciente, y evitamos un acos por semilla por pixel.
              *
-             * En modo --cannon, una bolita en pleno vuelo (o un fantasma de
+             * En modo canon, una bolita en pleno vuelo (o un fantasma de
              * estela) no esta sobre la esfera unitaria y no le corresponde
              * ninguna celda: se descarta con rr[k], que ya se calculo en
              * rotate_seeds sin costo extra de lectura. La tolerancia es floja
@@ -558,7 +558,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
  *  bolita ganadora), no una vez por semilla.
  *
  *  Nota sobre |C|^2: cuando TODAS las semillas estan sobre la esfera unitaria
- *  (el caso de siempre, sin --cannon), |C|^2 = 1 y esto era una constante
+ *  (el caso de siempre, sin canones), |C|^2 = 1 y esto era una constante
  *  compartida por todas. Con el modo canon una bolita en vuelo tiene |C| < 1,
  *  asi que |C|^2 pasa a leerse del arreglo rr[] (llenado en rotate_seeds
  *  junto con rx/ry/rz) en vez de ser una constante -- una carga y una resta
@@ -669,7 +669,7 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
                 if (b <= 0.0f) continue;                  /* bolita detras del ojo */
 
                 /* |C-O|^2 = |C|^2 - 2*dist*C.z + dist^2, con |C|^2 = rr[k] en
-                 * vez de la constante 1 de antes: en modo --cannon una
+                 * vez de la constante 1 de antes: en modo canon una
                  * bolita en pleno vuelo tiene |C| < 1, no esta sobre la
                  * esfera unitaria. */
                 float perp2 = (rr[k] + dist * dist - 2.0f * dist * rz[k]) - b * b;

@@ -44,7 +44,7 @@
  *  Rellena (o vuelve a llenar) la esfera con el angulo actual de la Config.
  *  Se usa al arrancar y cada vez que una tecla cambia el angulo.
  *
- *  Con --cannon 1 esto NO alcanza para animar la construccion: solo pinta el
+ *  Con --cannons K esto NO alcanza para animar la construccion: solo pinta el
  *  instante t=0 (una sola bolita recien disparada). El bucle con ventana
  *  llama a cannon_update() ademas de esto, en cada frame, para que la esfera
  *  se siga construyendo con el tiempo.
@@ -63,7 +63,7 @@ static void regen_sphere(SeedSet *seeds, const Config *cfg)
  *  Reescribe el SoA para el instante 'sim_t' del modo canon. Se llama una vez
  *  por frame, ANTES de render_frame(): la posicion es funcion pura de t, asi
  *  que no hace falta ningun estado entre llamadas (ver sphere.h). No-op si
- *  --cannon 0.
+ *  sin --cannons.
  * -------------------------------------------------------------------------- */
 static void cannon_update(SeedSet *seeds, const Config *cfg, double sim_t)
 {

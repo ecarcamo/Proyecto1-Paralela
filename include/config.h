@@ -41,7 +41,9 @@
 #define SS_FPS_TARGET       30.0     /* umbral del enunciado: no bajar de 30  */
 
 /* --------------------------------------------------------------------------
- *  Valores por defecto. Todos sobreescribibles por linea de comandos.
+ *  Valores por defecto. Los que tienen bandera se pueden sobreescribir por
+ *  linea de comandos; el canvas, el giro, el encuadre, la semilla del PRNG y
+ *  la deriva de color son FIJOS (ver la Config mas abajo).
  * -------------------------------------------------------------------------- */
 /* El default es el N critico MEDIDO a 1280x720 (ver docs/02-PARAMETRO-N.md
  * seccion 3): con este valor el binario SECUENCIAL corre justo en ~30 FPS,
@@ -113,8 +115,8 @@
  *    0 (default)  el slot i aterriza y se queda. La esfera se completa a los
  *                 techo(N/K)/R segundos y se queda completa: N bolitas
  *                 firmes. Es lo que se quiere ver -- la esfera construida a
- *                 canonazos. La animacion no muere: siguen el giro (--rot) y
- *                 la deriva de color (--color-speed).
+ *                 canonazos. La animacion no muere: siguen el giro y
+ *                 la deriva de color, que son fijos.
  *
  *    1            el slot i se vuelve a disparar cada T_ciclo segundos (un
  *                 fmod sobre la edad). Sirve para el informe: la carga
@@ -136,7 +138,13 @@
  *  en el origen exacto las bolitas recien disparadas se apilan y se solapan
  *  feo (y con K > 1 los canones no se distinguirian).
  * -------------------------------------------------------------------------- */
-#define SS_DEF_CANNONS       1       /* --cannons K: canones simultaneos      */
+/* --cannons es la UNICA bandera que enciende el modo canon: no hay un
+ * --cannon 0|1 aparte (esa bandera ya no existe). K = 0 (el default, o sea no pasar la bandera) es
+ * "sin canones" y la esfera aparece ya hecha; K >= 1 enciende el modo con K
+ * canones. Tener las dos banderas obligaba a escribir --cannon 1 --cannons 1
+ * para decir una sola cosa, y dejaba pasar el sinsentido --cannon 0 --cannons 8.
+ * cfg->cannon sigue existiendo adentro, derivado en config_validate(). */
+#define SS_DEF_CANNONS       0       /* --cannons K: 0 = modo canon apagado   */
 #define SS_DEF_MUZZLE_RADIUS 0.12    /* --muzzle-radius r0: donde estan las bocas */
 #define SS_MUZZLE_RADIUS_MAX 0.95    /* r0 >= 1 dispararia desde afuera       */
 #define SS_DEF_RECIRCULATE   0       /* --recirculate: 0 = aterrizan y se quedan */
@@ -164,19 +172,23 @@ typedef struct {
     /* --- el parametro N del enunciado --------------------------------- */
     int      n;             /* --n        semillas sobre la esfera          */
 
-    /* --- canvas ------------------------------------------------------- */
-    int      width;         /* --width    ancho  en pixeles (>= 640)        */
-    int      height;        /* --height   alto   en pixeles (>= 480)        */
-
-    /* --- geometria y apariencia --------------------------------------- */
+    /* --- geometria: lo unico configurable de la apariencia ------------ */
     double   angle_rad;     /* --angle    angulo de divergencia, en RADIANES */
-    double   rot_speed;     /* --rot      velocidad de giro, rad/s           */
-    double   sphere_frac;   /* --fill     fraccion de pantalla que ocupa     */
-    uint64_t seed;          /* --seed     semilla del PRNG (determinismo)    */
 
-    /* --- deriva de color de las semillas ya colocadas ------------------ */
-    double   color_speed;   /* --color-speed  vueltas de tono por segundo    */
-    double   color_spread;  /* --color-spread dispersion del ritmo, 0..1     */
+    /* --- fijos: identidad visual del screensaver, sin bandera ----------
+     * Siguen siendo campos y no constantes sueltas porque el renderer, el
+     * overlay y el bench los leen del Config; lo que se quito es la forma de
+     * cambiarlos desde la linea de comandos. Se inicializan una sola vez en
+     * config_default() con los SS_DEF_* de arriba. Fijar el canvas ademas
+     * hace que toda medicion salga a la misma resolucion sin tener que
+     * acordarse de pasarla, que es justo lo que el informe necesita. */
+    int      width;         /* canvas: ancho  en pixeles                    */
+    int      height;        /* canvas: alto   en pixeles                    */
+    double   rot_speed;     /* velocidad de giro, rad/s                     */
+    double   sphere_frac;   /* fraccion de pantalla que ocupa la esfera     */
+    uint64_t seed;          /* semilla del PRNG de colores (determinismo)   */
+    double   color_speed;   /* deriva de tono: vueltas por segundo          */
+    double   color_spread;  /* dispersion de ese ritmo entre semillas, 0..1 */
 
     /* --- que kernels se activan --------------------------------------- */
     int      physics;       /* --physics  0|1  repulsion Douady-Couder       */
@@ -184,7 +196,8 @@ typedef struct {
     int      raster;        /* --raster   0|1  bolitas rasterizadas (plan B) */
 
     /* --- modo canon: la esfera se construye a canonazos ---------------- */
-    int      cannon;        /* --cannon      0|1  enciende el modo canon     */
+    int      cannon;        /* DERIVADO de cannons en config_validate(): no  */
+                            /* tiene bandera propia. 1 si cannons >= 1.      */
     double   fire_rate;     /* --fire-rate   disparos por segundo            */
     double   muzzle_speed;  /* --muzzle-speed radios por segundo             */
     int      trail;         /* --trail       fantasmas de estela por bolita  */

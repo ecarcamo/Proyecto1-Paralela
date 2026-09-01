@@ -70,7 +70,7 @@ void seedset_free(SeedSet *s);
  *
  *  Es el nucleo matematico de sphere_fill_fibonacci(), extraido para que
  *  cualquier otra rutina que necesite "donde va la semilla i" (el cañon del
- *  modo --cannon, por ejemplo) lo calcule llamando a esto y no copiando la
+ *  modo canon, por ejemplo) lo calcule llamando a esto y no copiando la
  *  formula. Dos copias del angulo aureo tarde o temprano se desincronizan.
  *
  *    i          indice de la semilla, 0..n-1
@@ -275,8 +275,8 @@ static inline Vec3 seed_pos(const SeedSet *s, int i)
  *  NO filtra bolitas en vuelo ni fantasmas de estela: recorre s->n de punta a
  *  punta asumiendo que todas estan sobre la esfera. Eso esta bien porque el
  *  unico llamador (main.c) solo la invoca si cfg->physics esta activo, y
- *  config_validate() ya rechaza --cannon junto con --physics -- las dos
- *  situaciones nunca coinciden. Si algun dia se llega a llamar con --cannon,
+ *  config_validate() ya rechaza --cannons junto con --physics -- las dos
+ *  situaciones nunca coinciden. Si algun dia se llega a llamar en modo canon,
  *  hay que filtrar por radio antes (ver rr[] en render.c).
  * ------------------------------------------------------------------------- */
 double sphere_mean_divergence_deg(const SeedSet *s);
