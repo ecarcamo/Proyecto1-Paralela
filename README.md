@@ -76,10 +76,12 @@ que adivinar.
 | `--width <int>` | Ancho del canvas (mínimo 640) | 1280 |
 | `--height <int>` | Alto del canvas (mínimo 480) | 720 |
 | `--angle <grados>` | Ángulo de divergencia | 137.50776 |
+| `--rot <rad/s>` | Velocidad de giro de la esfera (0 = quieta) | 0.35 |
+| `--fill <frac>` | Fracción de pantalla que ocupa la esfera, (0, 1] | 0.84 |
 | `--seed <uint>` | Semilla del PRNG (determinista) | 12345 |
 | `--color-speed <v>` | Vueltas del círculo de tono por segundo (0 = color fijo) | 0.06 |
 | `--color-spread <f>` | Dispersión de ese ritmo entre semillas, 0..1 | 0.65 |
-| `--physics <0\|1>` | Repulsión tipo Douady–Couder | 1 |
+| `--physics <0\|1>` | Repulsión tipo Douady–Couder (incompatible con `--cannon 1`) | 0 |
 | `--voronoi <0\|1>` | Celdas de Voronoi vs. bolitas | 0 |
 | `--raster <0\|1>` | Bolitas rasterizadas (plan B barato, **no escala con N**) | 0 |
 | `--cannon <0\|1>` | Modo cañón: la esfera se construye a cañonazos | 0 |
@@ -90,11 +92,16 @@ que adivinar.
 | `--muzzle-radius <r0>` | Radio de la esfera chica donde están las bocas, [0, 0.95] | 0.12 |
 | `--recirculate <0\|1>` | `0`: aterrizan y se quedan (la esfera se completa). `1`: se redisparan | 0 |
 | `--trail <L>` | Fantasmas de estela por bolita en vuelo | 6 |
-| `--threads <int>` | Hilos de OpenMP | máximo del sistema |
 | `--bench <K>` | Corre K frames sin ventana y reporta tiempos | 0 |
+| `--vsync <0\|1>` | Sincronía vertical. **Poner en 0 para medir** | 1 |
 | `--no-render` | Modo headless | off |
 | `--csv` | Salida en CSV para graficar | off |
-| `--help` | Ayuda | |
+| `--help` / `-h` | Ayuda | |
+
+> Son **25 banderas** y la lista de arriba es exactamente la que acepta el parser
+> (`src/args.c`). `--threads` **no existe todavía**: aparecía en esta tabla pero el binario
+> la rechaza con `opcion desconocida`. Va a entrar junto con `bin/screensaver_omp` y
+> `make omp`, que tampoco existen — ver la sección **Estado** al final.
 
 ### Los tres kernels y su costo
 
