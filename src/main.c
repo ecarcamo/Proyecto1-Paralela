@@ -26,6 +26,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "args.h"
 #include "bench.h"
 #include "config.h"
@@ -70,6 +74,62 @@ static void cannon_update(SeedSet *seeds, const Config *cfg, double sim_t)
     if (!cfg->cannon) return;
     CannonParams cp = cannon_params_from_config(cfg);
     sphere_fill_cannon(seeds, &cp, sim_t);
+}
+
+/* ==========================================================================
+ *  Camino de verificacion: un unico frame, volcado crudo a stdout, sin SDL.
+ *
+ *  Existe para comparar screensaver_seq contra screensaver_omp bit a bit en
+ *  el mismo instante t: como todo el estado del frame es funcion pura de
+ *  (i, t) -- sin historial de particulas, sin fisica cuando hay canones --
+ *  los dos binarios tienen que producir exactamente el mismo framebuffer,
+ *  con cualquier numero de hilos.
+ *
+ *      ./bin/screensaver_seq --n 2000 --dump-frame 12.5 > seq.raw
+ *      ./bin/screensaver_omp --n 2000 --threads 32 --dump-frame 12.5 > omp.raw
+ *      cmp seq.raw omp.raw && echo IDENTICOS
+ *
+ *  Reusa seedset_alloc/fb_alloc/regen_sphere/render_frame: no hay logica de
+ *  render duplicada, solo el cableado para escribir el resultado a stdout
+ *  en vez de a una ventana.
+ * ========================================================================== */
+static int run_dump_frame(Config *cfg)
+{
+    SeedSet     seeds = {0};
+    Framebuffer fb    = {0};
+    int rc = EXIT_FAILURE;
+
+    CannonParams cp = cannon_params_from_config(cfg);
+    int cap = cfg->cannon ? sphere_cannon_capacity(&cp) : cfg->n;
+    if (seedset_alloc(&seeds, cap) != 0) {
+        fprintf(stderr, "error: no se pudo reservar memoria para %d semillas\n", cap);
+        goto cleanup;
+    }
+    if (fb_alloc(&fb, cfg->width, cfg->height) != 0) {
+        fprintf(stderr, "error: no se pudo reservar el framebuffer %dx%d\n",
+                cfg->width, cfg->height);
+        goto cleanup;
+    }
+    regen_sphere(&seeds, cfg);
+    if (cfg->cannon) sphere_fill_cannon(&seeds, &cp, cfg->dump_frame_t);
+
+    render_frame(&fb, &seeds, cfg, cfg->dump_frame_t);
+
+    /* Crudo, sin ningun encabezado: el 'cmp' de dos volcados con el mismo
+     * w/h/formato ya alcanza. fwrite en un solo llamado, tamano fijo. */
+    size_t n_px = (size_t)fb.w * (size_t)fb.h;
+    size_t wrote = fwrite(fb.px, sizeof(uint32_t), n_px, stdout);
+    if (wrote != n_px) {
+        fprintf(stderr, "error: fwrite escribio %zu de %zu pixeles\n", wrote, n_px);
+        goto cleanup;
+    }
+
+    rc = EXIT_SUCCESS;
+
+cleanup:
+    fb_free(&fb);
+    seedset_free(&seeds);
+    return rc;
 }
 
 /* ==========================================================================
@@ -284,11 +344,21 @@ int main(int argc, char **argv)
     /* 2) validacion cruzada del dominio (N, canvas, fill, ...). */
     if (config_validate(&cfg) != 0) return EXIT_FAILURE;
 
-    /* 3) dejar registrado con que parametros se corrio (salvo en modo CSV,
-     *    que debe quedar limpio para redirigir a un archivo). */
-    if (!cfg.csv) config_print(&cfg);
+    /* 2.5) hilos de OpenMP, ANTES de que exista cualquier region paralela.
+     *    El #ifdef es lo que permite que este mismo main.c compile en
+     *    screensaver_seq sin -fopenmp: el bloque entero desaparece. */
+#ifdef _OPENMP
+    if (cfg.threads > 0) omp_set_num_threads(cfg.threads);
+#endif
 
-    /* 4) dispatch: con ventana o headless para medir. */
-    if (cfg.headless) return run_headless(&cfg);
+    /* 3) dejar registrado con que parametros se corrio -- salvo en modo CSV
+     *    o dump-frame, que redirigen stdout a un archivo y tienen que
+     *    quedar limpios: config_print() mezclado con los bytes crudos del
+     *    framebuffer romperia el 'cmp' byte a byte entre seq y omp. */
+    if (!cfg.csv && !cfg.dump_frame) config_print(&cfg);
+
+    /* 4) dispatch: volcado de verificacion, ventana, o headless para medir. */
+    if (cfg.dump_frame) return run_dump_frame(&cfg);
+    if (cfg.headless)   return run_headless(&cfg);
     return run_window(&cfg);
 }

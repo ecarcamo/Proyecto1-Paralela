@@ -143,6 +143,12 @@ void args_usage(const char *prog)
 "  --no-render      corre sin abrir ventana (headless)\n"
 "  --csv            salida de mediciones en CSV\n"
 "  --vsync 0|1      sincronia vertical, 0 para medir  (def 1)\n"
+"  --threads T      hilos de OpenMP, 0 = automatico  (def %d).\n"
+"                   Solo screensaver_omp lo usa; en el secuencial se acepta\n"
+"                   y no hace nada.\n"
+"  --dump-frame T   renderiza un unico frame en el instante T (segundos),\n"
+"                   escribe el framebuffer crudo (ARGB8888) a stdout y\n"
+"                   termina. Sirve para comparar seq vs omp con 'cmp'.\n"
 "\n"
 "  -h, --help       muestra esta ayuda\n"
 "\n"
@@ -154,7 +160,8 @@ void args_usage(const char *prog)
         SS_DEF_MUZZLE_SPEED,
         SS_DEF_TRAIL,
         SS_MUZZLE_RADIUS_MAX,
-        SS_DEF_MUZZLE_RADIUS);
+        SS_DEF_MUZZLE_RADIUS,
+        SS_DEF_THREADS);
 }
 
 ArgsStatus args_parse(int argc, char **argv, Config *cfg)
@@ -206,6 +213,12 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
             cfg->cannons = (int)v;
         }
+        else if (strcmp(a, "--threads") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            long v;
+            if (s == NULL || parse_long(s, a, &v) != 0) goto bad;
+            cfg->threads = (int)v;
+        }
         /* --- reales ------------------------------------------------------ */
         else if (strcmp(a, "--angle") == 0) {
             /* El usuario piensa en grados (137.5); adentro todo va en radianes. */
@@ -231,6 +244,13 @@ ArgsStatus args_parse(int argc, char **argv, Config *cfg)
             double v;
             if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
             cfg->muzzle_radius = v;
+        }
+        else if (strcmp(a, "--dump-frame") == 0) {
+            const char *s = take_value(argc, argv, &i, a);
+            double v;
+            if (s == NULL || parse_double(s, a, &v) != 0) goto bad;
+            cfg->dump_frame   = 1;
+            cfg->dump_frame_t = v;
         }
 
         /* --- enumerados por nombre --------------------------------------

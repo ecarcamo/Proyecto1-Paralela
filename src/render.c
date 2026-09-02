@@ -303,6 +303,22 @@ static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float 
     }
 }
 
+/* ==========================================================================
+ *  render_points - NO se paraleliza (a proposito).
+ *
+ *  A diferencia de render_raycast/render_balls_raycast, aca el bucle externo
+ *  recorre SEMILLAS, no pixeles: cada iteracion llama a draw_ball(), que hace
+ *  read-modify-write sobre zbuf[k]/fb->px[k] para un rango de k que depende
+ *  de donde cae la bolita en pantalla. Dos semillas que se solapan pueden
+ *  escribir el mismo k desde dos hilos distintos -- una carrera de datos
+ *  real, no potencial, y no hay forma de resolverla con un pragma simple
+ *  (haria falta un lock por pixel o reordenar el algoritmo por completo).
+ *
+ *  Tampoco vale la pena: este kernel tiene costo casi CONSTANTE en N (ver el
+ *  comentario de render_balls_raycast mas abajo), asi que ni siquiera es el
+ *  kernel que el proyecto necesita medir. Es el ejemplo concreto de "tiene
+ *  un bucle" != "es paralelizable sin rediseño".
+ * ========================================================================== */
 static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
 {
     const int w = fb->w, h = fb->h;
@@ -464,6 +480,11 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
      * una vez por frame, no por pixel. */
     const float edge_w = edge_width_for(s->n);
 
+    /* Misma forma exacta que render_balls_raycast: escritura unica por pixel,
+     * todo lo que declara el cuerpo esta adentro del bucle, sin z-buffer ni
+     * acumulador. Mismo pragma y mismo schedule elegido con datos en
+     * render_balls_raycast (ver ese comentario para los numeros medidos). */
+    #pragma omp parallel for schedule(guided)
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);
@@ -640,6 +661,36 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
      * en el mundo en vez de en la pantalla. */
     const float pix_k = 2.0f * cam.tan_half_fov / (float)h;
 
+    /* El pragma que importa: cada iteracion 'j' escribe exactamente una fila
+     * de pixeles unicos (fb->px[j*w+i]), y todo lo que el cuerpo declara
+     * (d, thit, t1, p1, w1, t2, w2, od, c1, q, nrm, px, cov, y las del bloque
+     * de cobertura) esta declarado ADENTRO del bucle -- por eso OpenMP las
+     * hace privadas solo, sin que haga falta enumerar una sola en 'private'.
+     * No hay reduccion ni acumulador: el z-buffer que si tendria carrera es
+     * el de render_points(), y este kernel se invirtio (pixeles afuera,
+     * semillas adentro) precisamente para no necesitarlo.
+     *
+     * schedule(guided) y no static: el rechazo temprano contra la esfera
+     * envolvente deja filas enteras casi gratis (las de arriba/abajo de la
+     * silueta) y concentra el trabajo real en la banda central. Con static
+     * los hilos de los extremos terminarian de inmediato y quedarian
+     * esperando en la barrera.
+     *
+     * Medido en esta maquina (--n 10000 --cannons 10 --threads 16, 10
+     * repeticiones por variante):
+     *
+     *     static      media=1450.0 ms  sd=120.6  <- el peor, confirma el
+     *                                                desbalance geometrico
+     *     dynamic,1   media=1334.1 ms  sd= 52.0
+     *     dynamic,4   media=1303.2 ms  sd= 36.0
+     *     guided      media=1301.3 ms  sd= 28.8  <- elegido: mas rapido Y
+     *                                                mas estable
+     *
+     * guided y dynamic,4 quedan practicamente empatados en media (0.15% de
+     * diferencia); guided gana por tener la menor desviacion estandar de
+     * las cuatro. Sin -fopenmp este pragma es inerte: screensaver_seq no
+     * cambia. */
+    #pragma omp parallel for schedule(guided)
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);

@@ -100,6 +100,11 @@
 #define SS_DEF_MUZZLE_SPEED  1.5     /* radios por segundo; el vuelo dura 1/V */
 #define SS_DEF_TRAIL         6       /* fantasmas de estela por bolita en vuelo */
 
+/* 0 = dejar que OpenMP decida (normalmente el numero de hilos logicos del
+ * sistema). En screensaver_seq este campo se parsea igual pero nunca se lee:
+ * sin -fopenmp no hay ningun paralelismo que ajustar. */
+#define SS_DEF_THREADS      0
+
 /* --------------------------------------------------------------------------
  *  Modo canon, segunda parte: K canones y recirculacion opcional.
  *
@@ -206,10 +211,23 @@ typedef struct {
     double   muzzle_radius; /* --muzzle-radius  radio de la esfera de bocas  */
     int      recirculate;   /* --recirculate 0|1  0 = aterrizan y se quedan  */
 
+    /* --- paralelismo ---------------------------------------------------
+     * threads existe en los dos binarios (mismo Config, mismo parser), pero
+     * solo screensaver_omp lo lee: en el seq no hay ninguna region paralela
+     * que ajustar. Ver el #ifdef _OPENMP en main.c. */
+    int      threads;       /* --threads  T  hilos de OpenMP, 0 = automatico */
+
     /* --- modo medicion ------------------------------------------------ */
     int      bench_frames;  /* --bench K  0 = modo ventana normal            */
     int      headless;      /* --no-render  1 = sin ventana                  */
     int      csv;           /* --csv      1 = salida en CSV                  */
+
+    /* --- verificacion: volcado de un frame crudo -----------------------
+     * Sirve para comparar seq vs omp bit a bit en el mismo t: `cmp` entre
+     * dos volcados en el mismo t tiene que dar identico sin importar
+     * cuantos hilos use el omp. */
+    int      dump_frame;    /* --dump-frame T  1 = modo activo               */
+    double   dump_frame_t;  /* T: instante a volcar, en segundos             */
 
     /* --- misc --------------------------------------------------------- */
     int      vsync;         /* --vsync    0|1  (0 para medir sin tope)       */

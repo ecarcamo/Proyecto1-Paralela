@@ -58,9 +58,14 @@ Config config_defaults(void)
     cfg.muzzle_radius= SS_DEF_MUZZLE_RADIUS;
     cfg.recirculate  = SS_DEF_RECIRCULATE;
 
+    cfg.threads      = SS_DEF_THREADS;
+
     cfg.bench_frames = 0;               /* 0 = modo ventana */
     cfg.headless     = 0;
     cfg.csv          = 0;
+
+    cfg.dump_frame   = 0;
+    cfg.dump_frame_t = 0.0;
 
     cfg.vsync        = 1;
     cfg.paused       = 0;
@@ -106,6 +111,15 @@ int config_validate(const Config *cfg)
     if (cfg->bench_frames < 0) {
         fprintf(stderr, "error: --bench debe ser >= 0\n");
         return -7;
+    }
+
+    /* 0 es "que decida OpenMP"; negativo es un error de tipeo, no una forma
+     * valida de pedir algo. */
+    if (cfg->threads < 0) {
+        fprintf(stderr, "error: --threads debe ser >= 0 (se recibio %d);\n"
+                        "       0 deja que OpenMP elija el numero de hilos.\n",
+                cfg->threads);
+        return -18;
     }
 
     /* --- Modo canon ------------------------------------------------------
@@ -290,6 +304,12 @@ void config_print(const Config *cfg)
             }
         }
     }
+#ifdef _OPENMP
+    /* En screensaver_seq esto no se compila: sin -fopenmp no hay hilos que
+     * reportar, y config.c es el mismo archivo para los dos binarios. */
+    if (cfg->threads > 0) printf("  hilos OpenMP      : %d\n", cfg->threads);
+    else                  printf("  hilos OpenMP      : automatico\n");
+#endif
     if (cfg->bench_frames > 0)
         printf("  modo benchmark    : %d frames (descarta %d de calentamiento)\n",
                cfg->bench_frames, SS_DEF_BENCH_WARMUP);
