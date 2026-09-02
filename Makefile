@@ -26,11 +26,33 @@ else
 endif
 
 CC      ?= cc
-OPT     ?= -O2
+
+# -------------------------------------------------------------- optimizacion
+# -O3 en vez de -O2: habilita el desenrollado y la vectorizacion automatica
+# que -O2 deja fuera. NO se usa -ffast-math a proposito -- daria ~12% mas pero
+# rompe la reproducibilidad bit a bit, y esa es justamente la propiedad con la
+# que --dump-frame demuestra que la version paralela calcula lo mismo que la
+# secuencial. Un 12% no vale perder la verificacion.
+OPT     ?= -O3
+
+# La bandera de "compila para ESTA CPU" se llama distinto segun la
+# arquitectura: -march=native en x86, -mcpu=native en ARM (el Mac de Nico).
+# En vez de adivinar por plataforma se PRUEBA cual acepta el compilador, que
+# es a prueba de versiones de Apple Clang: si ninguna sirve, ARCH queda vacio
+# y el build sigue funcionando exactamente como antes.
+ARCH_TEST = $(shell $(CC) $(1) -E - </dev/null >/dev/null 2>&1 && echo ok)
+ifeq ($(call ARCH_TEST,-march=native),ok)
+    ARCH := -march=native
+else ifeq ($(call ARCH_TEST,-mcpu=native),ok)
+    ARCH := -mcpu=native
+else
+    ARCH :=
+endif
+
 STD     := -std=c11
 WARN    := -Wall -Wextra -Wshadow -Wno-unused-parameter
 INCLUDE := -Iinclude
-CFLAGS  := $(STD) $(OPT) $(WARN) $(INCLUDE)
+CFLAGS  := $(STD) $(OPT) $(ARCH) $(WARN) $(INCLUDE)
 LDLIBS  := -lm
 
 # ---------------------------------------------------------------------- SDL2
@@ -151,6 +173,7 @@ print-config:
 	@echo "CFLAGS      : $(CFLAGS)"
 	@echo "SDL2_CFLAGS : $(SDL2_CFLAGS)"
 	@echo "SDL2_LIBS   : $(SDL2_LIBS)"
+	@echo "ARCH        : $(ARCH)"
 	@echo "OMP_CFLAGS  : $(OMP_CFLAGS)"
 	@echo "OMP_LIBS    : $(OMP_LIBS)"
 	@echo "LIB_SRCS    : $(LIB_SRCS)"

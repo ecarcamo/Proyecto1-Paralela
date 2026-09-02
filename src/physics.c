@@ -47,6 +47,12 @@ double physics_max_dt(int n)
  *  la fuerza sobre la semilla 5 usaria la posicion vieja de la 3 pero la
  *  nueva de la 2, y el resultado dependeria del orden del bucle).
  * ========================================================================== */
+/* Debajo de este N, armar el equipo de hilos cuesta mas que el bucle: los
+ * 'parallel for' de abajo se saltan solos via la clausula if(). Sin -fopenmp
+ * la clausula es inerte igual que el pragma, asi que screensaver_seq no ve
+ * ninguna diferencia. */
+#define PHYS_PAR_MIN 256
+
 void physics_step(SeedSet *s, const PhysicsParams *p, double dt)
 {
     if (s == NULL || p == NULL || s->n < 2 || dt <= 0.0) return;
@@ -62,7 +68,13 @@ void physics_step(SeedSet *s, const PhysicsParams *p, double dt)
         return;                                   /* sin memoria, no crash */
     }
 
-    /* --- 1) posicion nueva con la aceleracion vieja, y 2) renormalizar --- */
+    /* --- 1) posicion nueva con la aceleracion vieja, y 2) renormalizar ---
+     *
+     * Cada 'i' lee y escribe SOLO su propio indice: no hay dependencia entre
+     * iteraciones y el reparto es exacto (todas las 'i' cuestan lo mismo), asi
+     * que schedule(static) sin resto. El 'if' evita pagar el fork/join cuando
+     * N es tan chico que armar el equipo cuesta mas que el bucle. */
+    #pragma omp parallel for schedule(static) if(n >= PHYS_PAR_MIN)
     for (int i = 0; i < n; ++i) {
         Vec3 pos = seed_pos(s, i);
         Vec3 vel = v3(s->vx[i], s->vy[i], s->vz[i]);
@@ -87,6 +99,20 @@ void physics_step(SeedSet *s, const PhysicsParams *p, double dt)
     /* --- 3) fuerzas en las posiciones nuevas: Coulomb con softening, N^2 completo --- */
     const float eps2 = p->epsilon * p->epsilon;
 
+    /* El unico O(N^2) del programa y el bucle mas caro cuando --physics 1.
+     *
+     * Por que no hay carrera: cada 'i' escribe unicamente s->vx/vy/vz[i] y
+     * s->ax/ay/az[i]. Lo que LEE de las demas semillas son x/y/z, que ya
+     * quedaron fijas en el paso 2 y nadie modifica dentro de este bucle. No
+     * hace falta reduccion ni atomicos: el acumulador 'F' es local a la
+     * iteracion, no compartido.
+     *
+     * schedule(static) y no guided: aca todas las 'i' hacen exactamente N
+     * iteraciones del bucle interno, o sea la carga es perfectamente uniforme
+     * y el reparto estatico es optimo. Es el contraste con el kernel de
+     * render, donde la silueta de la esfera desbalancea las filas y por eso
+     * ahi va guided (ver el comentario de render_balls_raycast). */
+    #pragma omp parallel for schedule(static) if(n >= PHYS_PAR_MIN)
     for (int i = 0; i < n; ++i) {
         Vec3 pi = seed_pos(s, i);
         Vec3 F  = v3_zero();

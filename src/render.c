@@ -44,6 +44,11 @@
 #define EDGE_FRAC  0.15f
 #define EDGE_MAX   0.05f
 
+/* Debajo de este N los bucles O(N) del preambulo (rotar semillas, colores del
+ * frame) no justifican el fork/join, y se saltan solos con la clausula if().
+ * El bucle por pixel NO lleva umbral: cuesta P*N y siempre conviene. */
+#define RENDER_PAR_MIN 256
+
 static inline float edge_width_for(int n)
 {
     if (n < 1) n = 1;
@@ -213,6 +218,13 @@ static uint32_t *frame_colors(const SeedSet *s, const Config *cfg, double t)
     if (c == NULL) return NULL;
 
     ColorAnim anim = { (float)cfg->color_speed, (float)cfg->color_spread };
+
+    /* color_for_seed_at() es una funcion PURA de (indice, seed, anim, t) --
+     * rng_f01_ch es un hash sin estado, no un generador con semilla mutable --
+     * asi que N hilos la pueden llamar a la vez y el resultado no depende del
+     * orden. Es exactamente la propiedad que ya buscaba el diseno (ver el
+     * comentario de arriba) y lo que deja el frame reproducible bit a bit. */
+    #pragma omp parallel for schedule(static) if(s->n >= RENDER_PAR_MIN)
     for (int i = 0; i < s->n; ++i)
         c[i] = color_for_seed_at((uint32_t)i, cfg->seed, &anim, t);
 
@@ -426,6 +438,12 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
 static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float ctx,
                          float *rx, float *ry, float *rz, float *rr)
 {
+    /* Cada 'i' escribe solo rx/ry/rz/rr[i] y lee solo la semilla 'i': sin
+     * dependencias y con carga uniforme, o sea static exacto. Es O(N) contra
+     * el O(P*N) del kernel, asi que no mueve la aguja por si solo -- entra
+     * porque es fraccion serial, y la fraccion serial es lo que le pone techo
+     * a Amdahl. Debajo de RENDER_PAR_MIN se salta solo. */
+    #pragma omp parallel for schedule(static) if(s->n >= RENDER_PAR_MIN)
     for (int i = 0; i < s->n; ++i) {
         Vec3 p = seed_pos(s, i);
         p = v3_rot_y(p, sy, cyv);
@@ -655,6 +673,20 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     const float r  = ball_world_radius(s->n);
     const float r2 = r * r;
 
+    /* |C-O|^2 no depende del rayo: es el mismo valor para los W*H pixeles,
+     * pero se estaba recalculando DENTRO del bucle por pixel. Se saca aca en
+     * una pasada O(N) por frame y rr[] pasa a guardarlo, en vez de |C|^2.
+     *
+     * Se puede pisar rr[] en el sitio porque en ESTE kernel solo se usaba
+     * dentro de esa cuenta -- el que lo lee como |C|^2 para descartar bolitas
+     * en vuelo es render_raycast, que tiene su propio buffer. Ademas de dos
+     * flops menos por pixel y por semilla, el bucle interno deja de leer
+     * rz[] y baja de cuatro arreglos a tres. */
+    const float dist2 = dist * dist;
+    #pragma omp parallel for schedule(static) if(s->n >= RENDER_PAR_MIN)
+    for (int k = 0; k < s->n; ++k)
+        rr[k] = rr[k] + dist2 - 2.0f * dist * rz[k];
+
     /* Tamano de un pixel en unidades de mundo, por unidad de profundidad. Es
      * lo que convierte la distancia rayo-centro en COBERTURA, que es lo que da
      * el borde suave: la misma rampa de un pixel del rasterizado, pero medida
@@ -719,11 +751,11 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
                 float b = rx[k] * d.x + ry[k] * d.y + rz[k] * d.z - od;
                 if (b <= 0.0f) continue;                  /* bolita detras del ojo */
 
-                /* |C-O|^2 = |C|^2 - 2*dist*C.z + dist^2, con |C|^2 = rr[k] en
-                 * vez de la constante 1 de antes: en modo canon una
-                 * bolita en pleno vuelo tiene |C| < 1, no esta sobre la
-                 * esfera unitaria. */
-                float perp2 = (rr[k] + dist * dist - 2.0f * dist * rz[k]) - b * b;
+                /* rr[k] ya ES |C-O|^2, precalculado arriba una vez por frame.
+                 * Sigue valiendo en modo canon: la cuenta partia de |C|^2 real
+                 * y no de la constante 1, asi que una bolita en pleno vuelo
+                 * (|C| < 1) queda igual de bien resuelta que antes. */
+                float perp2 = rr[k] - b * b;
                 if (perp2 >= r2) continue;                /* el rayo pasa de largo */
 
                 float tt = b - sqrtf(r2 - perp2);         /* cara de adelante */
