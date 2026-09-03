@@ -17,3 +17,6 @@ datos/tmp_*
 *~
 .DS_Store
 Thumbs.db
+
+# informe generado: NO se versiona
+Informe_*.pdf
