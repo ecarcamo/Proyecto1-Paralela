@@ -1,24 +1,10 @@
-/* ===========================================================================
- *  overlay.c - Fuente bitmap 5x7 embebida y dibujo de texto/FPS.
- *
- *  Cada glifo son 7 filas de 5 bits. En cada fila se usan los 5 bits bajos y
- *  el bit 0x10 es la columna de mas a la izquierda:
- *
- *        0x0E = 01110      .###.
- *        0x11 = 10001      #...#
- *        ...
- *
- *  La tabla se indexa por (ASCII - 32) con inicializadores designados, asi que
- *  los caracteres que no dibujamos quedan en cero (glifo vacio) sin tener que
- *  contar posiciones a mano.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* overlay.c - Fuente bitmap 5x7 embebida y dibujo de texto/FPS.
+ * Cada glifo son 7 filas de 5 bits (0x10 = columna izquierda); la tabla se
+ * indexa por (ASCII - 32), asi que los caracteres sin glifo quedan en cero. */
 #include "overlay.h"
 
 #include <stdio.h>
 
-/* Primer caracter representable y ancho/alto del glifo. */
 #define FONT_FIRST   32
 #define GLYPH_W       5
 #define GLYPH_H       7
@@ -85,8 +71,7 @@ static void fill_rect(Framebuffer *fb, int x, int y, int w, int h, uint32_t colo
             fb->px[yy * fb->w + xx] = color;
 }
 
-/* Devuelve el indice en la tabla para un caracter, o -1 si no hay glifo. Las
- * minusculas se mapean a su mayuscula para no duplicar la tabla. */
+/* Indice en la tabla, o -1 si no hay glifo; las minusculas van a su mayuscula. */
 static int glyph_index(char c)
 {
     if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
@@ -137,12 +122,12 @@ void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible
     int y = 8;
 
     const uint32_t WHITE = 0xFFFFFFFFu;
-    const uint32_t RED   = 0xFFFF3B30u;         /* FPS por debajo del umbral    */
-    const uint32_t DIM   = 0xFFB0B0C0u;         /* rotulos secundarios          */
+    const uint32_t RED   = 0xFFFF3B30u;         /* FPS por debajo del umbral */
+    const uint32_t DIM   = 0xFFB0B0C0u;         /* rotulos secundarios       */
 
     char buf[64];
 
-    /* --- Linea 1: FPS. Rojo si esta por debajo del piso del enunciado. ---- */
+    /* FPS en rojo si estan por debajo del piso del enunciado. */
     uint32_t fps_col = (fps < SS_FPS_TARGET) ? RED : WHITE;
     snprintf(buf, sizeof buf, "FPS %.1f", fps);
     overlay_text(fb, x, y, buf, fps_col, scale);
@@ -152,7 +137,7 @@ void overlay_stats(Framebuffer *fb, const Config *cfg, double fps, int n_visible
     overlay_text(fb, x, y, buf, DIM, scale);
     y += line_h;
 
-    /* --- Linea 3: modo de dibujo y semillas visibles este frame. ---------- */
+    /* Modo de dibujo y semillas visibles este frame. */
     snprintf(buf, sizeof buf, "%s  VIS=%d",
              cfg->voronoi ? "VORONOI" : "BOLITAS", n_visible);
     overlay_text(fb, x, y, buf, DIM, scale);
@@ -165,7 +150,7 @@ void overlay_physics(Framebuffer *fb, const Config *cfg, double divergence_deg)
     const int scale = (fb->h >= 700) ? 2 : 1;
     const int line_h = GLYPH_H * scale + 3;
     const int x = 8;
-    /* misma columna que overlay_stats, una linea mas abajo (3 lineas + margen) */
+    /* misma columna que overlay_stats, debajo de sus 3 lineas */
     const int y = 8 + line_h * 3;
 
     const uint32_t DIM = 0xFFB0B0C0u;

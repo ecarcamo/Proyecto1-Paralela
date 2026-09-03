@@ -1,12 +1,4 @@
-/* ===========================================================================
- *  bench.c - Bucle de medicion headless con estadisticas y salida CSV.
- *
- *  Se guardan TODOS los tiempos de los frames utiles en un arreglo (no solo
- *  sum/sum2) porque la mediana exige ordenar -- no hay forma de calcularla
- *  con acumuladores incrementales.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* bench.c - Bucle de medicion headless con estadisticas y salida CSV. */
 #include "bench.h"
 
 #include <stdio.h>
@@ -33,30 +25,20 @@ BenchStats bench_run(Framebuffer *fb, SeedSet *s, const Config *cfg)
     int useful = total - warmup;
     if (useful <= 0) return st;
 
+    /* Se guardan todos los tiempos: la mediana exige ordenar. */
     double *tiempos = (double *)malloc((size_t)useful * sizeof(double));
     if (tiempos == NULL) return st;                   /* sin memoria, no crash */
 
     PhysicsParams pp = { SS_DEF_PHYS_K, SS_DEF_PHYS_EPSILON,
                           SS_DEF_PHYS_GAMMA, SS_DEF_PHYS_MASS };
 
-    /* Mismo limite de estabilidad que usa el bucle con ventana: con N grande,
-     * 1/60 s ya pasa el tope de Verlet y la medicion correria sobre una nube
-     * de semillas explotada en vez de sobre la esfera. */
+    /* Mismo limite de Verlet que el bucle con ventana: con N grande, 1/60 s
+     * ya lo pasa y se mediria sobre una nube explotada. */
     const double dt_phys = (1.0 / 60.0 < physics_max_dt(s->n))
                          ? 1.0 / 60.0 : physics_max_dt(s->n);
 
-    /* Con --cannons K hay que saltarse el llenado: mientras los slots todavia
-     * no dispararon por primera vez, el costo por frame crece muestra a
-     * muestra y la media no describiria nada. t0 = T_ciclo + 1/V es el primer
-     * instante en el que ya todos los indices existen, y sirve para los dos
-     * modos:
-     *
-     *   --recirculate 0  a partir de t0 la esfera esta COMPLETA (n bolitas
-     *                    aterrizadas, cero en vuelo) y se queda asi.
-     *   --recirculate 1  a partir de t0 la carga es constante: siempre las
-     *                    mismas K*R/V bolitas en vuelo.
-     *
-     * En los dos casos lo que se mide es regimen permanente, no la rampa. */
+    /* Con canones se salta el llenado: t0 = T_ciclo + 1/V es el primer instante
+     * de regimen permanente (esfera completa, o carga constante si recircula). */
     CannonParams cp = cannon_params_from_config(cfg);
     double t = 0.0;
     if (cfg->cannon) {
@@ -77,8 +59,7 @@ BenchStats bench_run(Framebuffer *fb, SeedSet *s, const Config *cfg)
         if (f >= warmup) tiempos[idx++] = (b - a) * 1000.0;
     }
 
-    /* media y sd en dos pasadas: mas claro que Welford para este tamano, y el
-     * costo es insignificante comparado con los frames que ya se midieron. */
+    /* Media y sd en dos pasadas: mas claro que Welford y el costo no importa. */
     double suma = 0.0;
     for (int i = 0; i < useful; ++i) suma += tiempos[i];
     double media = suma / (double)useful;

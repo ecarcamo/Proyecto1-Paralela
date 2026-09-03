@@ -1,11 +1,4 @@
-/* ===========================================================================
- *  sphere.c - Generacion de la esfera de Fibonacci.
- *
- *  Son tres lineas de matematica. El resto del archivo es manejo de memoria
- *  a prueba de fallos y la medicion del angulo de divergencia.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* sphere.c - Esfera de Fibonacci, modo canon y medicion de la divergencia. */
 #include "sphere.h"
 #include "color.h"
 #include "config.h"
@@ -14,21 +7,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --------------------------------------------------------------------------
- *  Memoria
- * -------------------------------------------------------------------------- */
+/* ------------------------------------------------------------- memoria --- */
 
+/* Un solo malloc para los diez arreglos: x/y/z quedan contiguos (lo que quiere
+ * el prefetcher del Voronoi) y hay un unico puntero que liberar. */
 int seedset_alloc(SeedSet *s, int capacity)
 {
     if (s == NULL || capacity < 1) return -1;
 
     memset(s, 0, sizeof(*s));
 
-    /* Un solo malloc para los diez arreglos en vez de diez mallocs sueltos:
-     * garantiza que x[], y[] y z[] queden contiguos en memoria, que es
-     * exactamente lo que quiere el prefetcher cuando el bucle del Voronoi los
-     * recorre en paralelo. Ademas hay un solo puntero que liberar, asi que no
-     * existe el camino de "fallo a la mitad y hay que deshacer parcialmente". */
     size_t nf    = (size_t)capacity;
     size_t bytes = nf * (9u * sizeof(float) + sizeof(uint32_t));
 
@@ -49,41 +37,27 @@ int seedset_alloc(SeedSet *s, int capacity)
 void seedset_free(SeedSet *s)
 {
     if (s == NULL) return;
-    /* x apunta al inicio del bloque unico: liberarlo libera todo. */
-    free(s->x);
+    free(s->x);                      /* x es el inicio del bloque unico */
     memset(s, 0, sizeof(*s));
 }
 
-/* --------------------------------------------------------------------------
- *  El nucleo: la esfera de Fibonacci
- * -------------------------------------------------------------------------- */
+/* ---------------------------------------------------- esfera de Fibonacci - */
 
 Vec3 sphere_dir_fib(int i, int n, double angle_rad)
 {
     if (n < 1) n = 1;
 
-    /* dz es el grosor de cada franja de area 4*pi/N.
-     * El +1/2 del numerador centra la semilla en su franja (regla del punto
-     * medio) en vez de pegarla al borde. Sin ese medio, las semillas de los
-     * polos quedan corridas y la uniformidad empeora notablemente para N
-     * pequeno. */
+    /* Grosor de cada franja de area 4*pi/N; el +1/2 centra la semilla. */
     const double dz = 2.0 / (double)n;
 
-    /* --- altura: reparto de AREAS iguales (teorema de Arquimedes) -------- */
+    /* Altura: reparto de AREAS iguales (teorema de Arquimedes). */
     double z = 1.0 - dz * ((double)i + 0.5);
 
-    /* --- radio del paralelo a esa altura (Pitagoras sobre S^2) ----------- */
-    /* El chequeo protege contra un z que por redondeo salga apenas fuera de
-     * [-1,1]: sin el, sqrt de un negativo diminuto daria NaN y arruinaria
-     * una semilla entera. */
+    /* Radio del paralelo; el chequeo evita NaN si z se pasa de [-1,1]. */
     double rho2 = 1.0 - z * z;
     double rho  = rho2 > 0.0 ? sqrt(rho2) : 0.0;
 
-    /* --- azimut: el angulo aureo acumulado -------------------------------
-     * En double, no en float: n*psi con n en los miles pierde precision
-     * rapido en float y el patron se degrada de forma visible.
-     * El fmod mantiene el argumento chico para que sin/cos no pierdan
-     * precision por reduccion de rango con n grande. */
+    /* Azimut: angulo aureo acumulado en double, con fmod para no perder rango. */
     double theta = fmod((double)i * angle_rad, 2.0 * SS_PI);
 
     return v3((float)(rho * cos(theta)), (float)(rho * sin(theta)), (float)z);
@@ -102,24 +76,16 @@ void sphere_fill_fibonacci(SeedSet *s, int n, double angle_rad, uint64_t seed)
         s->y[i] = p.y;
         s->z[i] = p.z;
 
-        /* Estado de la fisica en reposo. Si --physics 0, nunca se toca. */
+        /* Estado de la fisica en reposo; si --physics 0, nunca se toca. */
         s->vx[i] = s->vy[i] = s->vz[i] = 0.0f;
         s->ax[i] = s->ay[i] = s->az[i] = 0.0f;
 
-        /* Color pseudoaleatorio. Funcion pura de (i, seed): sin estado, asi
-         * que la version paralela produce exactamente los mismos colores. */
+        /* Color: funcion pura de (i, seed), igual en secuencial y paralelo. */
         s->color[i] = color_for_seed((uint32_t)i, seed);
     }
 }
 
-/* --------------------------------------------------------------------------
- *  Modo canon: la esfera se construye a canonazos, para siempre
- *
- *  Todo lo de aqui abajo es funcion pura de (i, t). No hay una sola variable
- *  que sobreviva entre llamadas: eso es lo que permite (a) pausar sin codigo
- *  extra, (b) que el bench arranque en cualquier instante, y (c) que la
- *  version paralela produzca el mismo framebuffer bit a bit.
- * -------------------------------------------------------------------------- */
+/* ---- modo canon: todo funcion pura de (i, t), sin estado entre llamadas --- */
 
 CannonParams cannon_params_from_config(const Config *cfg)
 {
@@ -163,11 +129,8 @@ void cannon_slot(int i, int n, int cannons, int layout,
     int c, r;
 
     if (layout == SS_CANNON_BLOCKS) {
-        /* Bloques contiguos: el canon c se queda con [base(c), base(c+1)),
-         * base(c) = techo(c*n/K). Se usa ESE reparto y no piso(c*n/K) porque
-         * su inverso es exacto y O(1): con base = techo, el canon del indice
-         * i es piso(i*K/n) -- con piso el inverso no cierra y habria que
-         * buscar el bloque. Los tamanos quedan en {piso(n/K), techo(n/K)}. */
+        /* Bloques contiguos con base(c) = techo(c*n/K): su inverso es exacto y
+         * O(1), canon = piso(i*K/n). Con piso() habria que buscar el bloque. */
         long li = (long)i, lk = (long)cannons, ln = (long)n;
         c = (int)((li * lk) / ln);
         if (c >= cannons) c = cannons - 1;        /* defensivo ante redondeo */
@@ -175,9 +138,8 @@ void cannon_slot(int i, int n, int cannons, int layout,
         r = (int)(li - base);
         if (r < 0) r = 0;
     } else {
-        /* Round-robin: el canon c toma uno de cada K indices. Como los
-         * indices consecutivos estan separados por el angulo aureo, los K
-         * chorros se entremezclan y la esfera se puebla pareja. */
+        /* Round-robin: como los indices van separados por el angulo aureo,
+         * los K chorros se entremezclan y la esfera se puebla pareja. */
         c = i % cannons;
         r = i / cannons;
     }
@@ -186,6 +148,7 @@ void cannon_slot(int i, int n, int cannons, int layout,
     if (round_out  != NULL) *round_out  = r;
 }
 
+/* Bocas repartidas con la misma construccion de Fibonacci, pero con K puntos. */
 Vec3 cannon_muzzle(int c, const CannonParams *p)
 {
     if (p == NULL) return v3_zero();
@@ -196,12 +159,10 @@ Vec3 cannon_muzzle(int c, const CannonParams *p)
     double r0 = p->muzzle_radius;
     if (!(r0 > 0.0)) return v3_zero();            /* todas las bocas al origen */
 
-    /* Misma construccion de Fibonacci que las semillas, con K puntos en vez
-     * de N: los canones quedan repartidos parejo sobre una esfera chica sin
-     * una sola linea de matematica nueva. */
     return v3_scale(sphere_dir_fib(c, k, p->angle_rad), (float)r0);
 }
 
+/* Capacidad = n + min(techo(K*R/V) + K, n) * L: el peor caso con la cola llena. */
 int sphere_cannon_capacity(const CannonParams *p)
 {
     if (p == NULL) return 1;
@@ -213,16 +174,10 @@ int sphere_cannon_capacity(const CannonParams *p)
     int k = (p->cannons < 1) ? 1 : p->cannons;
     if (k > n) k = n;
 
-    /* Bolitas en vuelo en regimen permanente: la fraccion del ciclo que una
-     * bolita pasa volando es (1/V)/T_ciclo, y multiplicada por las n del
-     * patron da K*R/V. El "+ k" es margen: cada canon puede tener una bolita
-     * de mas en el aire segun donde caiga el redondeo de la ronda dentro de
-     * la ventana de vuelo. */
+    /* En regimen permanente vuelan K*R/V bolitas; el "+ k" es margen de redondeo. */
     double en_vuelo_d = (double)k * p->fire_rate / p->muzzle_speed;
     if (!(en_vuelo_d >= 0.0)) en_vuelo_d = 0.0;           /* NaN defensivo */
-    if (en_vuelo_d > (double)n) en_vuelo_d = (double)n;   /* tope duro: no hay
-                                                           * mas bolitas que
-                                                           * indices */
+    if (en_vuelo_d > (double)n) en_vuelo_d = (double)n;   /* no hay mas que indices */
     long en_vuelo = (long)ceil(en_vuelo_d) + (long)k;
     if (en_vuelo > (long)n) en_vuelo = n;
 
@@ -232,30 +187,13 @@ int sphere_cannon_capacity(const CannonParams *p)
     return (int)capacity;
 }
 
-/* Delta de tiempo entre fantasmas consecutivos de la estela: reparte los
- * 'trail' fantasmas a lo largo del vuelo completo (1/muzzle_speed segundos),
- * en vez de un valor fijo sin relacion con la velocidad de vuelo -- con
- * muzzle_speed alto el vuelo es corto y una estela con delta fijo grande
- * saldria de la boca antes de que la bolita llegara a la mitad de camino. */
+/* Separacion entre fantasmas: reparte 'trail' a lo largo del vuelo (1/V s). */
 static double cannon_trail_delta(double muzzle_speed, int trail)
 {
     return (1.0 / muzzle_speed) / (double)(trail + 1);
 }
 
-/* Fase del indice i en el instante t: cuanto hace que salio del canon.
- *
- * Devuelve 0 si la bolita todavia no tuvo su primer disparo (t < t_disparo);
- * en ese caso *fase_out queda sin tocar. A partir del primer disparo la
- * bolita ya nunca deja de existir.
- *
- * Con recirculate = 0 (el default) la fase es la edad cruda y crece sin
- * techo: cannon_pos_at_phase() satura el radio en 1, asi que la bolita
- * aterriza y se queda. Es lo que hace que la esfera se COMPLETE y se quede
- * completa en n bolitas.
- *
- * Con recirculate = 1 se envuelve al periodo T_ciclo y el slot vuelve a
- * salir de la boca: carga constante para medir, pero solo una fraccion
- * 1 - K*R/(V*n) de la esfera puesta en cualquier instante. */
+/* Cuanto hace que salio del canon; 0 si todavia no tuvo su primer disparo. */
 static int cannon_phase(int i, const CannonParams *p, double t_ciclo, double t,
                         double *fase_out)
 {
@@ -268,10 +206,8 @@ static int cannon_phase(int i, const CannonParams *p, double t_ciclo, double t,
 
     double fase = edad;
 
+    /* Recirculacion = este fmod; sin el la fase crece y la bolita se queda. */
     if (p->recirculate) {
-        /* La recirculacion entera es este fmod. fmod de un no-negativo es
-         * no-negativo, pero se envuelve igual por si el redondeo devuelve
-         * algo apenas < 0. */
         fase = fmod(edad, t_ciclo);
         if (fase < 0.0) fase += t_ciclo;
     }
@@ -280,12 +216,7 @@ static int cannon_phase(int i, const CannonParams *p, double t_ciclo, double t,
     return 1;
 }
 
-/* Posicion del indice i cuando lleva 'fase' segundos de vuelo. La bolita sale
- * de la boca de SU canon y va en linea recta a su lugar de Fibonacci: sigue
- * siendo forma cerrada, solo que ahora el origen del segmento no es el centro.
- *
- * Con muzzle_radius = 0 la boca es el origen exacto y esto se reduce, bit a
- * bit, al  dir * radio  del canon unico. */
+/* Vuelo en linea recta de la boca a su lugar de Fibonacci: sigue siendo cerrada. */
 static Vec3 cannon_pos_at_phase(int i, const CannonParams *p, double fase)
 {
     double radio = p->muzzle_speed * fase;
@@ -303,9 +234,7 @@ static Vec3 cannon_pos_at_phase(int i, const CannonParams *p, double fase)
     return v3_madd(boca, v3_sub(destino, boca), (float)radio);
 }
 
-/* Escribe un slot del SoA. Semilla real y fantasma de estela van al mismo
- * lugar: el renderer no distingue, y por eso la estela no lo obliga a
- * cambiar nada. */
+/* Semilla real y fantasma de estela van al mismo slot: el renderer no distingue. */
 static void cannon_write(SeedSet *s, int slot, Vec3 pos, uint32_t color)
 {
     s->x[slot] = pos.x;
@@ -342,22 +271,14 @@ void sphere_fill_cannon(SeedSet *s, const CannonParams *p, double t)
         cannon_write(s, written, cannon_pos_at_phase(i, p, fase), base_color);
         written++;
 
-        /* Fantasmas de estela: la MISMA formula evaluada en el pasado. Solo
-         * mientras la bolita sigue en vuelo -- una vez aterrizada no tiene
-         * sentido dejarle una cola fija detras apuntando al centro, se veria
-         * como un rayo clavado en la esfera. */
-        if (fase >= t_vuelo) continue;             /* ya aterrizo */
+        if (fase >= t_vuelo) continue;             /* aterrizada: no lleva cola */
 
+        /* Fantasmas: la misma formula evaluada en el pasado. */
         for (int j = 1; j <= p->trail && written < cap; j++) {
             double fase_j = fase - (double)j * delta;
-            /* La cola no cruza hacia atras del disparo que la genero. Sin
-             * este corte, una bolita recien recirculada arrastraria fantasmas
-             * del ciclo anterior, pegados a la superficie. */
-            if (fase_j < 0.0) break;
+            if (fase_j < 0.0) break;               /* la cola no cruza su disparo */
 
-            /* Atenuar el color con la antiguedad del fantasma: el mas viejo,
-             * el mas tenue, para que se lea como una cola y no como copias
-             * identicas apiladas. */
+            /* El fantasma mas viejo, el mas tenue. */
             float k = 1.0f - (float)j / (float)(p->trail + 1);
             cannon_write(s, written, cannon_pos_at_phase(i, p, fase_j),
                          rgb_mul(base_color, k));
@@ -368,18 +289,13 @@ void sphere_fill_cannon(SeedSet *s, const CannonParams *p, double t)
     s->n = written;
 }
 
-/* --------------------------------------------------------------------------
- *  Medicion del angulo de divergencia
- * -------------------------------------------------------------------------- */
+/* ------------------------------------------------ angulo de divergencia --- */
 
+/* Diferencia media de azimut entre semillas consecutivas, en grados. */
 double sphere_mean_divergence_deg(const SeedSet *s)
 {
     if (s == NULL || s->n < 2) return 0.0;
 
-    /* El angulo de divergencia es la diferencia de AZIMUT entre semillas
-     * consecutivas, o sea el angulo entre sus proyecciones al plano XY.
-     * Se promedia envolviendo a [0, 2pi) porque las diferencias crudas se
-     * acumulan mas alla de una vuelta. */
     double sum   = 0.0;
     int    count = 0;
 
@@ -387,6 +303,7 @@ double sphere_mean_divergence_deg(const SeedSet *s)
         double a0 = atan2((double)s->y[i],     (double)s->x[i]);
         double a1 = atan2((double)s->y[i + 1], (double)s->x[i + 1]);
 
+        /* Envolver a [0, 2pi): las diferencias crudas pasan de una vuelta. */
         double d = a1 - a0;
         while (d < 0.0)          d += 2.0 * SS_PI;
         while (d >= 2.0 * SS_PI) d -= 2.0 * SS_PI;

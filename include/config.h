@@ -1,37 +1,16 @@
-/* ===========================================================================
- *  config.h - Contrato de configuracion compartido por todos los modulos.
- *
- *  ESTE ARCHIVO ES EL CONTRATO DEL EQUIPO. Toda la configuracion del programa
- *  viaja en una sola estructura Config que se llena UNA vez (al parsear los
- *  argumentos) y de ahi en adelante se pasa como 'const *' a todos lados.
- *
- *  Motivo: el enunciado penaliza el hard-coding y exige parametrizar leyendo
- *  argumentos del comando. Centralizar todo aqui hace que agregar un
- *  parametro sea tocar un solo lugar, y que ningun modulo tenga constantes
- *  magicas escondidas.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* config.h - Una sola Config, llenada al parsear y pasada como 'const *'. */
 #ifndef CONFIG_H
 #define CONFIG_H
 
 #include <stdint.h>
 
-/* --------------------------------------------------------------------------
- *  Constantes matematicas fundamentales.
- *
- *  El angulo aureo NO se escribe como 137.50776 a mano: se DERIVA de phi.
- *  Es la diferencia entre "usamos una constante magica que copiamos de
- *  internet" y "sabemos de donde sale". Ver docs/01-FUNDAMENTO-MATEMATICO.md
- * -------------------------------------------------------------------------- */
+/* El angulo aureo se DERIVA de phi, no se copia como 137.50776 a mano. */
 #define SS_PI          3.14159265358979323846
 #define SS_PHI         1.61803398874989484820   /* (1 + sqrt(5)) / 2          */
 #define SS_GOLDEN_ANG  (2.0 * SS_PI / (SS_PHI * SS_PHI))  /* ~2.39996 rad     */
                                                           /* ~137.50776 grados */
 
-/* --------------------------------------------------------------------------
- *  Limites para la programacion defensiva (docs/02-PARAMETRO-N.md, seccion 4)
- * -------------------------------------------------------------------------- */
+/* Limites de la programacion defensiva (docs/02-PARAMETRO-N.md, seccion 4). */
 #define SS_N_MIN            1
 #define SS_N_MAX            5000000  /* ~200 MB en SoA: el techo defendible   */
 #define SS_N_WARN           50000    /* arriba de esto se advierte, no se aborta */
@@ -40,16 +19,8 @@
 #define SS_DIM_MAX          16384
 #define SS_FPS_TARGET       30.0     /* umbral del enunciado: no bajar de 30  */
 
-/* --------------------------------------------------------------------------
- *  Valores por defecto. Los que tienen bandera se pueden sobreescribir por
- *  linea de comandos; el canvas, el giro, el encuadre, la semilla del PRNG y
- *  la deriva de color son FIJOS (ver la Config mas abajo).
- * -------------------------------------------------------------------------- */
-/* El default es el N critico MEDIDO a 1280x720 (ver docs/02-PARAMETRO-N.md
- * seccion 3): con este valor el binario SECUENCIAL corre justo en ~30 FPS,
- * que es el piso que exige el enunciado. Arrancar por defecto en 1000 dejaria
- * al secuencial en 4 FPS y pareceria que el programa esta roto.
- * Subir N a proposito por encima de esto es la demo del proyecto. */
+/* Defaults. El de N es el N critico MEDIDO a 1280x720 (docs/02, seccion 3):
+ * con este valor el binario SECUENCIAL corre justo en ~30 FPS. */
 #define SS_DEF_N            128
 #define SS_DEF_WIDTH        1280
 #define SS_DEF_HEIGHT       720
@@ -58,121 +29,45 @@
 #define SS_DEF_FILL         0.84     /* fraccion de la altura que ocupa la esfera */
 #define SS_DEF_BENCH_WARMUP 10       /* frames descartados por calentamiento  */
 
-/* --------------------------------------------------------------------------
- *  Deriva de color de las semillas ya colocadas (ColorAnim en color.h).
- *
- *  El default NO es 0: con el color congelado la esfera queda con la misma
- *  paleta desde el primer frame hasta el ultimo. A 0.06 vueltas/s cada semilla
- *  tarda ~17 s en dar la vuelta completa al circulo de tono -- lento como para
- *  leerse como una transicion y no como un parpadeo -- y con el spread cada
- *  una lo hace a su propio ritmo, asi que la esfera se va poblando de tonos
- *  distintos en vez de cambiar en bloque.
- *
- *  El tope de velocidad es de seguridad, no de rendimiento: por arriba de una
- *  vuelta por segundo esto deja de ser una transicion gradual y pasa a ser un
- *  estroboscopio de N colores.
- * -------------------------------------------------------------------------- */
+/* Deriva de color: 0.06 = una vuelta cada ~17 s. El tope es de seguridad
+ * fotosensible, no de rendimiento. */
 #define SS_DEF_COLOR_SPEED  0.06     /* vueltas del circulo de tono por segundo */
 #define SS_DEF_COLOR_SPREAD 0.65     /* dispersion del ritmo entre semillas, 0..1 */
 #define SS_COLOR_SPEED_MAX  2.0      /* tope defendible en |vueltas/s|         */
 
-/* --------------------------------------------------------------------------
- *  Fisica: repulsion de Coulomb con softening + Velocity-Verlet.
- *  Ver docs/01-FUNDAMENTO-MATEMATICO.md seccion 5. No son argumentos de CLI
- *  (el enunciado no lo pide para esto): se calibraron a ojo para que el
- *  sistema converja en pocos segundos sin oscilar para siempre.
- * -------------------------------------------------------------------------- */
+/* Fisica (docs/01 seccion 5). No son argumentos de CLI: se calibraron para que
+ * el sistema converja en pocos segundos sin oscilar para siempre. */
 #define SS_DEF_PHYS_K        1.0f    /* constante de Coulomb                  */
 #define SS_DEF_PHYS_EPSILON  0.05f   /* softening: evita la singularidad en r=0 */
 #define SS_DEF_PHYS_GAMMA    0.5f    /* friccion viscosa, sin ella no converge */
 #define SS_DEF_PHYS_MASS     1.0f    /* masa de cada semilla                  */
 
-/* Constante del limite de estabilidad dt_max = SAFETY/sqrt(N) de Verlet.
- * Ver la tabla medida en include/physics.h (physics_max_dt). */
+/* Constante de dt_max = SAFETY/sqrt(N); tabla medida en include/physics.h. */
 #define SS_PHYS_DT_SAFETY    0.35
 
-/* --------------------------------------------------------------------------
- *  Modo canon: la esfera arranca vacia y un canon en el centro dispara las
- *  semillas hacia afuera hasta que aterrizan en su posicion de Fibonacci.
- *  Ver sphere_fill_cannon() en sphere.h para la formula cerrada.
- * -------------------------------------------------------------------------- */
+/* Modo canon: la esfera se construye a canonazos (ver sphere_fill_cannon). */
 #define SS_DEF_FIRE_RATE     60.0    /* disparos por segundo                  */
 #define SS_DEF_MUZZLE_SPEED  1.5     /* radios por segundo; el vuelo dura 1/V */
 #define SS_DEF_TRAIL         6       /* fantasmas de estela por bolita en vuelo */
 
-/* 0 = dejar que OpenMP decida (normalmente el numero de hilos logicos del
- * sistema). En screensaver_seq este campo se parsea igual pero nunca se lee:
- * sin -fopenmp no hay ningun paralelismo que ajustar. */
+/* 0 = que decida OpenMP. En screensaver_seq se parsea pero nunca se lee. */
 #define SS_DEF_THREADS      0
 
-/* --------------------------------------------------------------------------
- *  Modo canon, segunda parte: K canones y recirculacion opcional.
- *
- *  N es el TOPE de la esfera, no un punto de partida: los canones disparan
- *  los N indices del patron y ahi se acaba el reparto. Esa es la unica
- *  semantica que deja medir, porque N es el parametro de carga del enunciado
- *  y el patron de Fibonacci depende de N en TODOS sus puntos --
- *  sphere_dir_fib() reparte areas con z = 1 - 2(i+1/2)/n, asi que mover n
- *  reubica cada semilla ya colocada, no agrega una al final.
- *
- *  --recirculate elige que pasa DESPUES de que aterriza la ultima:
- *
- *    0 (default)  el slot i aterriza y se queda. La esfera se completa a los
- *                 techo(N/K)/R segundos y se queda completa: N bolitas
- *                 firmes. Es lo que se quiere ver -- la esfera construida a
- *                 canonazos. La animacion no muere: siguen el giro y
- *                 la deriva de color, que son fijos.
- *
- *    1            el slot i se vuelve a disparar cada T_ciclo segundos (un
- *                 fmod sobre la edad). Sirve para el informe: la carga
- *                 dibujada queda CONSTANTE en regimen permanente y K pasa a
- *                 ser una perilla de carga ortogonal a N.
- *
- *  Por que el default es 0: con recirculacion la esfera NO se mantiene llena.
- *  La fraccion aterrizada en regimen permanente es
- *
- *        aterrizadas / N = 1 - K*R/(V*N)
- *
- *  porque cada slot pasa 1/V segundos volando de cada T_ciclo = techo(N/K)/R.
- *  Con los valores que documentaba el README (N=400 K=8 R=60 V=1.5) eso da
- *  1 - 480/600 = 0.20: la esfera se queda en el 20% para siempre y lo que se
- *  ve es un chorro permanente, nunca una esfera. La recirculacion sigue
- *  disponible, pero pedida a proposito y no de arranque.
- *
- *  El default de K es 1, y el radio de boca es > 0 porque con todas las bocas
- *  en el origen exacto las bolitas recien disparadas se apilan y se solapan
- *  feo (y con K > 1 los canones no se distinguirian).
- * -------------------------------------------------------------------------- */
-/* --cannons es la UNICA bandera que enciende el modo canon: no hay un
- * --cannon 0|1 aparte (esa bandera ya no existe). K = 0 (el default, o sea no pasar la bandera) es
- * "sin canones" y la esfera aparece ya hecha; K >= 1 enciende el modo con K
- * canones. Tener las dos banderas obligaba a escribir --cannon 1 --cannons 1
- * para decir una sola cosa, y dejaba pasar el sinsentido --cannon 0 --cannons 8.
- * cfg->cannon sigue existiendo adentro, derivado en config_validate(). */
+/* --cannons K enciende el modo canon (K = 0 lo apaga). --recirculate 1 vuelve
+ * a disparar cada slot: carga constante, pero solo deja puesta una fraccion
+ * 1 - K*R/(V*N) de la esfera, y por eso el default es 0. */
 #define SS_DEF_CANNONS       0       /* --cannons K: 0 = modo canon apagado   */
 #define SS_DEF_MUZZLE_RADIUS 0.12    /* --muzzle-radius r0: donde estan las bocas */
 #define SS_MUZZLE_RADIUS_MAX 0.95    /* r0 >= 1 dispararia desde afuera       */
 #define SS_DEF_RECIRCULATE   0       /* --recirculate: 0 = aterrizan y se quedan */
 
-/* Reparto de indices entre los K canones (--cannon-layout).
- *
- *  ROUNDROBIN: el canon c se queda con los indices c, c+K, c+2K, ...  Como
- *  los indices consecutivos estan separados por el angulo aureo, los chorros
- *  se entremezclan y la esfera se puebla pareja. Es el default: mantiene la
- *  uniformidad, que es justamente el punto del patron.
- *
- *  BLOCKS: el canon c se hace cargo de un rango contiguo de indices y se ven
- *  K frentes avanzando por bandas. Mas espectacular, menos uniforme.
- *
- *  Las dos reparten los N indices EXACTAMENTE una vez, sin huecos ni
- *  repetidos (lo verifica el test de cobertura). */
+/* --cannon-layout: ROUNDROBIN entremezcla los chorros y mantiene la
+ * uniformidad; BLOCKS da K frentes por bandas, mas vistoso y menos uniforme. */
 #define SS_CANNON_ROUNDROBIN 0
 #define SS_CANNON_BLOCKS     1
 #define SS_DEF_CANNON_LAYOUT SS_CANNON_ROUNDROBIN
 
-/* ==========================================================================
- *  Config - una sola estructura para todo el programa.
- * ========================================================================== */
+/* Una sola estructura para todo el programa. */
 typedef struct {
     /* --- el parametro N del enunciado --------------------------------- */
     int      n;             /* --n        semillas sobre la esfera          */
@@ -180,13 +75,7 @@ typedef struct {
     /* --- geometria: lo unico configurable de la apariencia ------------ */
     double   angle_rad;     /* --angle    angulo de divergencia, en RADIANES */
 
-    /* --- fijos: identidad visual del screensaver, sin bandera ----------
-     * Siguen siendo campos y no constantes sueltas porque el renderer, el
-     * overlay y el bench los leen del Config; lo que se quito es la forma de
-     * cambiarlos desde la linea de comandos. Se inicializan una sola vez en
-     * config_default() con los SS_DEF_* de arriba. Fijar el canvas ademas
-     * hace que toda medicion salga a la misma resolucion sin tener que
-     * acordarse de pasarla, que es justo lo que el informe necesita. */
+    /* --- fijos: identidad visual, sin bandera, pero leidos del Config --- */
     int      width;         /* canvas: ancho  en pixeles                    */
     int      height;        /* canvas: alto   en pixeles                    */
     double   rot_speed;     /* velocidad de giro, rad/s                     */
@@ -201,8 +90,7 @@ typedef struct {
     int      raster;        /* --raster   0|1  bolitas rasterizadas (plan B) */
 
     /* --- modo canon: la esfera se construye a canonazos ---------------- */
-    int      cannon;        /* DERIVADO de cannons en config_validate(): no  */
-                            /* tiene bandera propia. 1 si cannons >= 1.      */
+    int      cannon;        /* DERIVADO de cannons: 1 si cannons >= 1        */
     double   fire_rate;     /* --fire-rate   disparos por segundo            */
     double   muzzle_speed;  /* --muzzle-speed radios por segundo             */
     int      trail;         /* --trail       fantasmas de estela por bolita  */
@@ -211,10 +99,7 @@ typedef struct {
     double   muzzle_radius; /* --muzzle-radius  radio de la esfera de bocas  */
     int      recirculate;   /* --recirculate 0|1  0 = aterrizan y se quedan  */
 
-    /* --- paralelismo ---------------------------------------------------
-     * threads existe en los dos binarios (mismo Config, mismo parser), pero
-     * solo screensaver_omp lo lee: en el seq no hay ninguna region paralela
-     * que ajustar. Ver el #ifdef _OPENMP en main.c. */
+    /* --- paralelismo: existe en los dos binarios, lo lee solo el omp --- */
     int      threads;       /* --threads  T  hilos de OpenMP, 0 = automatico */
 
     /* --- modo medicion ------------------------------------------------ */
@@ -222,10 +107,7 @@ typedef struct {
     int      headless;      /* --no-render  1 = sin ventana                  */
     int      csv;           /* --csv      1 = salida en CSV                  */
 
-    /* --- verificacion: volcado de un frame crudo -----------------------
-     * Sirve para comparar seq vs omp bit a bit en el mismo t: `cmp` entre
-     * dos volcados en el mismo t tiene que dar identico sin importar
-     * cuantos hilos use el omp. */
+    /* --- verificacion: cmp entre dos volcados en el mismo t ------------ */
     int      dump_frame;    /* --dump-frame T  1 = modo activo               */
     double   dump_frame_t;  /* T: instante a volcar, en segundos             */
 
@@ -234,19 +116,14 @@ typedef struct {
     int      paused;        /* estado en vivo, no es argumento               */
 } Config;
 
-/* Devuelve una Config con todos los valores por defecto ya puestos.
- * args_parse() parte de aqui y solo sobreescribe lo que venga en argv. */
+/* Config con todos los defaults puestos; args_parse() parte de aqui. */
 Config config_defaults(void);
 
-/* Chequeo de coherencia posterior al parseo. Devuelve 0 si todo esta bien,
- * o un numero negativo y un mensaje en stderr si algo quedo invalido.
- * Se llama SIEMPRE, incluso si el parseo no reporto errores: hay reglas que
- * solo se pueden verificar cuando ya estan todos los campos llenos. */
+/* Chequeo de coherencia posterior al parseo: 0 si esta bien, negativo y un
+ * mensaje en stderr si no. Se llama SIEMPRE, aunque el parseo no falle. */
 int  config_validate(const Config *cfg);
 
-/* Imprime la configuracion efectiva. Sirve para (a) que el usuario confirme
- * que sus argumentos se leyeron como esperaba, y (b) que quede registrado en
- * los logs de las mediciones con que parametros se corrio cada prueba. */
+/* Imprime la configuracion efectiva: confirma lo leido y queda en los logs. */
 void config_print(const Config *cfg);
 
 #endif /* CONFIG_H */

@@ -1,14 +1,6 @@
-/* ===========================================================================
- *  config.c - Valores por defecto, validacion cruzada e impresion.
- *
- *  La validacion vive aqui y no en args.c a proposito: args.c valida cada
- *  argumento POR SEPARADO mientras lo lee, pero hay reglas que solo se pueden
- *  comprobar cuando ya estan todos los campos llenos (por ejemplo, que el
- *  modo bench no tenga sentido con vsync activo). Esas van en
- *  config_validate() y se corren una sola vez al final.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* config.c - Defaults, validacion cruzada e impresion de la configuracion.
+ * args.c valida cada argumento por separado; aca van las reglas que solo se
+ * pueden comprobar cuando ya estan todos los campos llenos. */
 #include "config.h"
 
 #include <math.h>
@@ -30,25 +22,11 @@ Config config_defaults(void)
     cfg.color_speed  = SS_DEF_COLOR_SPEED;
     cfg.color_spread = SS_DEF_COLOR_SPREAD;
 
-    /* Apagada por defecto: con la fisica encendida las semillas se relajan y
-     * el patron aureo se convierte en un panal, o sea se deja de ver la esfera
-     * de Fibonacci que es el objeto del proyecto. Es una demo aparte, se
-     * enciende con --physics 1. */
-    cfg.physics      = 0;
-    /* Por defecto la esfera se dibuja con BOLITAS: es la figura de referencia
-     * del proyecto (esfera de Fibonacci con una esferita por semilla). El
-     * raycasting con celdas de Voronoi -- que es el kernel pesado a
-     * paralelizar -- sigue disponible con --voronoi 1. */
-    cfg.voronoi      = 0;
-    /* Las bolitas se resuelven por RAYCASTING, no rasterizando discos. El
-     * rasterizado sigue disponible con --raster 1, pero no es el baseline: su
-     * costo es casi constante en N (el area total pintada no depende de N) y
-     * no se paraleliza por semillas sin una carrera en el z-buffer. Ver el
-     * comentario largo de render_balls_raycast(). */
-    cfg.raster       = 0;
+    cfg.physics      = 0;   /* con fisica el patron aureo se vuelve un panal */
+    cfg.voronoi      = 0;   /* la figura de referencia son las bolitas       */
+    cfg.raster       = 0;   /* y se resuelven por raycasting, no rasterizando */
 
-    /* Derivado de cannons al final de args_parse(). Aca solo tiene que ser
-     * coherente con SS_DEF_CANNONS = 0: sin canones, modo apagado. */
+    /* Derivado de cannons al final de args_parse(); SS_DEF_CANNONS = 0. */
     cfg.cannon       = 0;
     cfg.fire_rate    = SS_DEF_FIRE_RATE;
     cfg.muzzle_speed = SS_DEF_MUZZLE_SPEED;
@@ -80,7 +58,7 @@ int config_validate(const Config *cfg)
         return -1;
     }
 
-    /* --- El parametro N del enunciado ---------------------------------- */
+    /* N, el parametro del enunciado. */
     if (cfg->n < SS_N_MIN) {
         fprintf(stderr, "error: N debe ser >= %d (se recibio %d)\n",
                 SS_N_MIN, cfg->n);
@@ -95,26 +73,15 @@ int config_validate(const Config *cfg)
         return -3;
     }
 
-    /* --- Canvas, encuadre y color: ya no se validan aca -----------------
-     * width, height, sphere_frac, color_speed y color_spread perdieron su
-     * bandera: los fija config_default() desde los SS_DEF_* y no hay camino
-     * por el que el usuario les meta un valor. Validarlos seria codigo
-     * inalcanzable, y peor: los mensajes nombraban --fill, --color-speed y
-     * --color-spread, banderas que ya no existen.
-     *
-     * Los invariantes que esas ramas cuidaban (canvas >= 640x480 del
-     * enunciado, encuadre en (0,1], magnitud del tono acotada por seguridad
-     * fotosensible) siguen valiendo por construccion: se leen directamente de
-     * las constantes en config.h. Si alguna vuelve a ser configurable, vuelve
-     * su validacion con ella. */
+    /* Canvas, encuadre y color ya no se validan: no tienen bandera, salen
+     * fijos de los SS_DEF_* y sus invariantes valen por construccion. */
 
     if (cfg->bench_frames < 0) {
         fprintf(stderr, "error: --bench debe ser >= 0\n");
         return -7;
     }
 
-    /* 0 es "que decida OpenMP"; negativo es un error de tipeo, no una forma
-     * valida de pedir algo. */
+    /* 0 es "que decida OpenMP"; negativo es un error de tipeo. */
     if (cfg->threads < 0) {
         fprintf(stderr, "error: --threads debe ser >= 0 (se recibio %d);\n"
                         "       0 deja que OpenMP elija el numero de hilos.\n",
@@ -122,12 +89,8 @@ int config_validate(const Config *cfg)
         return -18;
     }
 
-    /* --- Modo canon ------------------------------------------------------
-     * --physics asume que las semillas ya estan sobre la esfera para poder
-     * repelerse; una bolita a mitad de vuelo no tiene esa geometria. En vez
-     * de aplicar la fisica solo a las aterrizadas (que cambiaria el
-     * significado de la demo de Douady-Couder), se rechaza la combinacion
-     * de entrada: mas simple, mas explicito, sin sorpresas. */
+    /* Modo canon: --physics asume las semillas ya sobre la esfera, y una
+     * bolita en vuelo no lo esta, asi que se rechaza la combinacion. */
     if (cfg->cannon && cfg->physics) {
         fprintf(stderr,
                 "error: --cannons y --physics no se pueden usar juntos: la\n"
@@ -150,15 +113,8 @@ int config_validate(const Config *cfg)
                 cfg->trail);
         return -13;
     }
-    /* K canones: no mas que indices para repartir. Con K > N habria canones
-     * sin un solo indice asignado: no es un error sutil, es pedir algo que no
-     * existe.
-     *
-     * El caso K < 1 se chequea SIEMPRE, no solo con el modo encendido: K = 0
-     * es "sin canones" y es legitimo, pero K negativo es un error de tipeo que
-     * no se puede interpretar como apagar el modo. Va aca y no dentro del
-     * if (cfg->cannon) porque con K negativo cannon ya vale 0 y el guardia
-     * dejaria pasar el disparate en silencio. */
+    /* K < 1 se chequea SIEMPRE: con K negativo cannon ya vale 0 y un guardia
+     * if (cfg->cannon) dejaria pasar el disparate en silencio. */
     if (cfg->cannons < 0) {
         fprintf(stderr, "error: --cannons debe ser >= 0 (se recibio %d);\n"
                         "       0 apaga el modo canon, K >= 1 lo enciende.\n",
@@ -172,8 +128,8 @@ int config_validate(const Config *cfg)
                 cfg->cannons, cfg->n);
         return -15;
     }
-    /* La boca tiene que quedar ADENTRO de la esfera: con r0 >= 1 el canon
-     * estaria sobre la superficie o afuera, y el "vuelo" iria hacia adentro. */
+    /* Con r0 >= 1 la boca queda sobre la superficie o afuera y el vuelo iria
+     * hacia adentro. */
     if (cfg->cannon && (cfg->muzzle_radius < 0.0 ||
                         cfg->muzzle_radius > SS_MUZZLE_RADIUS_MAX)) {
         fprintf(stderr,
@@ -187,24 +143,12 @@ int config_validate(const Config *cfg)
         return -17;
     }
 
-    /* --- Advertencias: no abortan, es decision del usuario ------------- */
-    /* Bolitas en vuelo en regimen permanente = K*R/V. Si eso supera N, en
-     * todo instante hay mas bolitas viajando que posiciones en el patron: la
-     * esfera nunca termina de llenarse y lo que se ve es un chorro, no una
-     * esfera densificandose. Es una eleccion legitima para forzar carga, asi
-     * que se avisa y se sigue: la decision es del usuario. */
+    /* Advertencias: avisan y siguen, la decision es del usuario. */
     if (cfg->cannon && cfg->muzzle_speed > 0.0) {
         double en_vuelo = (double)cfg->cannons * cfg->fire_rate / cfg->muzzle_speed;
 
-        /* Sin recirculacion la esfera SIEMPRE termina completa: los indices se
-         * disparan una vez y se quedan. Lo unico que puede pasar es que se
-         * llene tan rapido que no se vea el llenado, y eso no es un problema
-         * que amerite un aviso. Con recirculacion, en cambio, la fraccion
-         * aterrizada en regimen permanente es 1 - K*R/(V*N) y puede quedar
-         * ridiculamente baja sin que nada avise: el umbral viejo era
-         * K*R/V > N, que solo pesca el caso extremo de fraccion <= 0. Con
-         * N=400 K=8 R=60 V=1.5 daba 320 < 400 y no avisaba nada, pero la
-         * esfera se quedaba en el 20% para siempre. */
+        /* Sin recirculacion la esfera siempre termina completa; con ella la
+         * fraccion puesta es 1 - K*R/(V*N) y puede quedar muy baja. */
         if (cfg->recirculate) {
             double frac = 1.0 - en_vuelo / (double)cfg->n;
             if (frac < 0.0) frac = 0.0;
@@ -266,19 +210,8 @@ void config_print(const Config *cfg)
                cfg->cannon_layout == SS_CANNON_BLOCKS ? "bloques contiguos"
                                                       : "round-robin",
                cfg->muzzle_radius);
-        /* El modelo de carga del informe, impreso con los numeros de ESTA
-         * corrida. Sale aca y no en el informe a mano para que no se
-         * desincronice del codigo:
-         *
-         *     dibujadas = n + (K*R/V) * (L/2)
-         *
-         * Las bolitas en vuelo NO se suman aparte de n: con recirculacion
-         * cada indice esta o aterrizado o volando, nunca las dos cosas, asi
-         * que las reales son siempre n y lo unico que se agrega son los
-         * fantasmas. Y son L/2 y no L por bolita en vuelo, porque una recien
-         * salida todavia no desplego la cola (los fantasmas no cruzan hacia
-         * atras de su propio disparo) y la cantidad crece lineal con la fase.
-         * Verificado contra el codigo en tests/test_sphere.c, seccion 8. */
+        /* Modelo de carga: dibujadas = n + (K*R/V)*(L/2), verificado en
+         * tests/test_sphere.c seccion 8. */
         if (cfg->muzzle_speed > 0.0) {
             double t_llenado =
                 (double)((cfg->n + cfg->cannons - 1) / cfg->cannons) / cfg->fire_rate;
@@ -293,9 +226,7 @@ void config_print(const Config *cfg)
                        en_vuelo,
                        (double)cfg->n + en_vuelo * (double)cfg->trail / 2.0);
             } else {
-                /* Sin recirculacion el regimen permanente es la esfera
-                 * COMPLETA: n bolitas aterrizadas y cero en vuelo. El pico de
-                 * carga ocurre durante el llenado, no al final. */
+                /* Sin recirculacion el pico de carga es durante el llenado. */
                 printf("  recirculacion     : no  (la esfera se completa en %.2f s y se queda)\n",
                        t_llenado);
                 printf("  carga             : pico ~%.0f durante el llenado; %d ya completa\n",
@@ -305,8 +236,7 @@ void config_print(const Config *cfg)
         }
     }
 #ifdef _OPENMP
-    /* En screensaver_seq esto no se compila: sin -fopenmp no hay hilos que
-     * reportar, y config.c es el mismo archivo para los dos binarios. */
+    /* En screensaver_seq no se compila: no hay hilos que reportar. */
     if (cfg->threads > 0) printf("  hilos OpenMP      : %d\n", cfg->threads);
     else                  printf("  hilos OpenMP      : automatico\n");
 #endif

@@ -1,22 +1,4 @@
-/* ===========================================================================
- *  render.c - Framebuffer, camara y el raycasting con Voronoi esferico.
- *
- *  Esta version reemplaza el dibujo de puntos por el kernel real del
- *  proyecto: por cada pixel se lanza un rayo, se intersecta contra la esfera
- *  unitaria y se busca a que semilla le toca esa celda del Voronoi esferico.
- *  Es O(P*N) -- P pixeles de la silueta por N semillas -- y es exactamente el
- *  cuello de botella que se va a paralelizar despues.
- *
- *  Deliberadamente NO lleva ningun '#pragma omp', NO usa acos() en el bucle
- *  caliente y NO usa rejilla espacial: este es el baseline secuencial
- *  honesto contra el que se mide el speedup (docs/PLAN-03-DIEGUITO.md).
- *
- *  El render de puntos original (discos con z-buffer) se conserva como
- *  render_points(): sigue siendo el plan B si --voronoi 0 o si algun equipo
- *  necesita un fallback mas barato.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* render.c - Framebuffer, camara y los tres kernels de dibujado. */
 #include "render.h"
 
 #include <math.h>
@@ -24,29 +6,13 @@
 
 #include "color.h"
 
-/* Fondo casi negro con un toque frio: hace resaltar los colores vivos de las
- * semillas sin ser un negro plano que se ve barato. */
-#define RENDER_BG  0xFF0A0A12u
+#define RENDER_BG  0xFF0A0A12u   /* negro con un toque frio */
 
-/* Ancho de la banda de antialiasing entre celdas de Voronoi.
- *
- * NO puede ser una constante fija: la medida que se compara es best1-best2,
- * una diferencia de productos punto, y esa diferencia ENCOGE con N. Cada
- * celda cubre 4*pi/N de area, o sea un radio angular de ~2/sqrt(N) rad, y en
- * el centro de la celda la diferencia vale como mucho 1-cos(2*theta) ~ 8/N.
- * Con un ancho fijo de 0.02 y N=3000 (donde 8/N = 0.0027) TODO el pixel cae
- * dentro de la banda de borde y la esfera entera se funde con el fondo: se ve
- * negra. Por eso la banda se deriva de N y se queda en una fraccion chica de
- * esa diferencia maxima, que es lo que la vuelve una linea fina a cualquier N.
- *
- * EDGE_FRAC es esa fraccion (15% del salto maximo). El clamp superior evita
- * que con N muy chico (1..4 celdas gigantes) la banda se coma media esfera. */
+/* Banda de antialiasing entre celdas: se deriva de N porque best1-best2 ~ 8/N. */
 #define EDGE_FRAC  0.15f
 #define EDGE_MAX   0.05f
 
-/* Debajo de este N los bucles O(N) del preambulo (rotar semillas, colores del
- * frame) no justifican el fork/join, y se saltan solos con la clausula if().
- * El bucle por pixel NO lleva umbral: cuesta P*N y siempre conviene. */
+/* Debajo de este N los bucles O(N) del preambulo no justifican el fork/join. */
 #define RENDER_PAR_MIN 256
 
 static inline float edge_width_for(int n)
@@ -56,9 +22,7 @@ static inline float edge_width_for(int n)
     return (w > EDGE_MAX) ? EDGE_MAX : w;
 }
 
-/* ==========================================================================
- *  Framebuffer
- * ========================================================================== */
+/* --------------------------------------------------------- framebuffer --- */
 int fb_alloc(Framebuffer *fb, int w, int h)
 {
     if (fb == NULL || w <= 0 || h <= 0) return -1;
@@ -88,25 +52,18 @@ void fb_clear(Framebuffer *fb, uint32_t argb)
     for (size_t i = 0; i < count; ++i) fb->px[i] = argb;
 }
 
-/* ==========================================================================
- *  Camara
- * ========================================================================== */
+/* -------------------------------------------------------------- camara --- */
 Camera camera_make(const Config *cfg)
 {
     Camera cam;
 
-    /* Campo de vision vertical fijo de 50 grados: encuadre comodo, sin la
-     * distorsion de gran angular. La distancia al origen se DERIVA de el para
-     * que la esfera unitaria ocupe la fraccion pedida de la altura. */
+    /* FOV vertical fijo; la distancia se deriva de el y de sphere_frac. */
     const float fov_v      = 50.0f * (float)SS_PI / 180.0f;
     cam.tan_half_fov       = tanf(fov_v * 0.5f);
 
     float frac = (cfg != NULL) ? (float)cfg->sphere_frac : (float)SS_DEF_FILL;
     if (frac <= 0.0f) frac = (float)SS_DEF_FILL;
 
-    /* Un punto en el borde superior de la esfera (offset vertical 1 respecto
-     * al centro) debe proyectarse a 'frac' de la media altura. En proyeccion
-     * perspectiva eso es (1/dist)/tan_half_fov = frac  ->  dist = ... */
     float dist = 1.0f / (frac * cam.tan_half_fov);
     if (dist < 1.5f) dist = 1.5f;   /* nunca meter la camara dentro de la esfera */
 
@@ -119,7 +76,7 @@ Camera camera_make(const Config *cfg)
 
 Vec3 camera_ray(const Camera *cam, int i, int j, int w, int h)
 {
-    /* Centro del pixel a coordenadas normalizadas [-1, 1], con Y hacia arriba. */
+    /* Centro del pixel a coordenadas normalizadas [-1,1], con Y hacia arriba. */
     float aspect = (float)w / (float)h;
     float ndc_x  = ((i + 0.5f) / (float)w) * 2.0f - 1.0f;
     float ndc_y  = 1.0f - ((j + 0.5f) / (float)h) * 2.0f;
@@ -133,56 +90,16 @@ Vec3 camera_ray(const Camera *cam, int i, int j, int w, int h)
     return v3_norm(dir);
 }
 
-/* ==========================================================================
- *  render_points - cada semilla dibujada como una ESFERITA con z-buffer.
- *
- *  Antes cada semilla era un disco de color PLANO. Por eso el resultado se
- *  veia como confeti y no como la figura de referencia: una bolita real tiene
- *  relieve propio (su lado iluminado y su lado oscuro) y un brillo especular.
- *  Aca el disco se sombrea POR PIXEL reconstruyendo la normal de una esfera:
- *  dentro del disco, con (u,v) las coordenadas locales normalizadas a [-1,1],
- *
- *      nz = sqrt(1 - u^2 - v^2)      ->  normal = (u, v, nz)
- *
- *  que es la misma identidad de la esfera unitaria que usa el raycasting, solo
- *  que en el espacio local del disco. Cuesta un sqrt por pixel de bolita, y a
- *  cambio la figura pasa de puntos planos a esferas.
- *
- *  El radio y el centro son FLOTANTES a proposito. Redondearlos a pixeles
- *  enteros mete un salto de tamano discreto justo donde el redondeo cambia de
- *  valor, y como el factor de perspectiva depende de la profundidad, ese salto
- *  cae sobre un plano de profundidad constante -- o sea, sobre un CIRCULO
- *  dentro de la silueta. Con N grande (radio ~1 px) el salto es de 1 a 2 px,
- *  cuatro veces el area, y se ve como una segunda esfera dibujada por dentro.
- *  Con el borde por cobertura el tamano varia de forma continua y no hay
- *  ningun umbral donde saltar.
- * ========================================================================== */
-
-/* Luz en el espacio del DISCO: x a la derecha, y hacia abajo, z hacia el ojo.
- * Arriba-izquierda y al frente, que es de donde viene la luz en la referencia. */
+/* ------------------------------------------------------------ bolitas ---- */
+/* Luz en el espacio del disco: x derecha, y abajo, z hacia el ojo. */
 #define BALL_LX  (-0.45f)
 #define BALL_LY  (-0.55f)
 #define BALL_LZ   (0.70f)
-#define BALL_SPEC_POW  28.0f   /* dureza del brillo: alto = punto chico y duro */
-#define BALL_SPEC_K    0.55f   /* cuanto blanco mete el brillo, 0..1          */
+#define BALL_SPEC_POW  28.0f   /* dureza del brillo especular */
+#define BALL_SPEC_K    0.55f   /* cuanto blanco mete el brillo, 0..1 */
+#define BALL_FILL      1.60f   /* algo menos que el 1.9/sqrt(N) que las hace tocarse */
 
-/* Fraccion del radio "que se tocan" (1.9/sqrt(N)) que se usa de verdad.
- * Ver el calculo en render_points. */
-#define BALL_FILL      1.60f
-
-/* ---------------------------------------------------------------------------
- *  Radio de la bolita en unidades de MUNDO (la esfera grande tiene radio 1).
- *
- *  Es el mismo calculo que hacia render_points en pixeles, movido aca para que
- *  el rasterizado y el raycasting usen EXACTAMENTE el mismo tamano: si cada uno
- *  tuviera su formula, cambiar --voronoi cambiaria el tamano de las bolitas y
- *  las dos rutas dejarian de ser comparables al medir.
- *
- *  En un empaque hexagonal sobre la esfera cada semilla ocupa 4*pi/N de area,
- *  de donde la distancia al vecino mas cercano es ~3.81/sqrt(N) radianes y el
- *  radio para que se TOQUEN es la mitad. BALL_FILL se queda un poco abajo de
- *  ese 1.9 teorico porque en el borde de la silueta el escorzo las junta.
- * ------------------------------------------------------------------------- */
+/* Radio de la bolita en unidades de mundo; unico para los tres kernels. */
 static float ball_world_radius(int n)
 {
     if (n < 1) n = 1;
@@ -190,26 +107,7 @@ static float ball_world_radius(int n)
     return (r > 0.5f) ? 0.5f : r;      /* con N chico, que no se coma la esfera */
 }
 
-/* ==========================================================================
- *  frame_colors - el color de las N semillas EN ESTE INSTANTE.
- *
- *  La deriva de color NO se guarda en s->color[]: se recalcula cada frame a
- *  partir de (indice, seed, t) con color_for_seed_at(). Guardarla seria mutar
- *  el SeedSet desde el render -- que recibe 's' como const y no le pertenece --
- *  y ademas volveria el color un estado ACUMULADO: dos hilos escribiendo el
- *  mismo arreglo, y el color dependiendo de cuantos frames se hayan dibujado
- *  en vez de solo del instante t. Recalcular lo mantiene puro: el frame del
- *  segundo 12.5 sale identico se haya llegado a el en 30 o en 400 frames, y
- *  la version paralela puede reproducirlo bit a bit.
- *
- *  El costo es O(N) por frame contra el O(P*N) del kernel de Voronoi, o sea
- *  perdido en el ruido; y es un bucle sin dependencias, asi que cuando se
- *  paralelice acepta un 'parallel for' directo.
- *
- *  Devuelve NULL cuando no hay nada que animar (deriva de color en 0) o si falla el
- *  malloc; en ambos casos el llamador cae de vuelta en s->color[], que es
- *  exactamente el mismo color con t = 0.
- * ========================================================================== */
+/* Color de las N semillas en el instante t; NULL = usar los fijos del SeedSet. */
 static uint32_t *frame_colors(const SeedSet *s, const Config *cfg, double t)
 {
     if (cfg == NULL || cfg->color_speed == 0.0 || s->n < 1) return NULL;
@@ -219,11 +117,7 @@ static uint32_t *frame_colors(const SeedSet *s, const Config *cfg, double t)
 
     ColorAnim anim = { (float)cfg->color_speed, (float)cfg->color_spread };
 
-    /* color_for_seed_at() es una funcion PURA de (indice, seed, anim, t) --
-     * rng_f01_ch es un hash sin estado, no un generador con semilla mutable --
-     * asi que N hilos la pueden llamar a la vez y el resultado no depende del
-     * orden. Es exactamente la propiedad que ya buscaba el diseno (ver el
-     * comentario de arriba) y lo que deja el frame reproducible bit a bit. */
+    /* color_for_seed_at() es pura: se recalcula cada frame en vez de acumularse. */
     #pragma omp parallel for schedule(static) if(s->n >= RENDER_PAR_MIN)
     for (int i = 0; i < s->n; ++i)
         c[i] = color_for_seed_at((uint32_t)i, cfg->seed, &anim, t);
@@ -231,6 +125,7 @@ static uint32_t *frame_colors(const SeedSet *s, const Config *cfg, double t)
     return c;
 }
 
+/* Rasteriza una semilla como esferita: normal nz = sqrt(1-u^2-v^2), z-buffer. */
 static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float rf,
                       float depth, float r_world, uint32_t color, float k_world)
 {
@@ -249,8 +144,7 @@ static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float 
     const float rlim2 = rlim * rlim;
     const float z_min = depth - r_world;    /* lo mas cerca que puede estar */
 
-    /* Vector medio de Blinn-Phong: L + V con V = (0,0,1), normalizado. Es
-     * constante para todas las bolitas, asi que se calcula una vez aca. */
+    /* Vector medio de Blinn-Phong (L + V, V = (0,0,1)): igual para todas. */
     const float hx = BALL_LX, hy = BALL_LY, hz = BALL_LZ + 1.0f;
     const float hinv = 1.0f / sqrtf(hx * hx + hy * hy + hz * hz);
     const float Hx = hx * hinv, Hy = hy * hinv, Hz = hz * hinv;
@@ -260,39 +154,29 @@ static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float 
         for (int x = x0; x <= x1; ++x) {
             float dx = (float)x - cxf;
 
-            /* Dos descartes baratos ANTES del sqrt: las esquinas de la caja
-             * (comparando distancias al cuadrado) y los pixeles donde ni el
-             * polo de la bolita alcanza a estar delante de lo ya dibujado. */
+            /* Dos descartes baratos antes del sqrt. */
             float d2 = dx * dx + dy * dy;
             if (d2 >= rlim2) continue;
 
             int k = y * w + x;
             if (z_min >= zbuf[k]) continue;
 
-            /* Cobertura: fraccion del pixel que cae dentro de la bolita. Es una
-             * rampa lineal de un pixel de ancho centrada en el borde, no un
-             * corte binario. Esto es lo que hace que el radio pueda ser
-             * fraccionario: rf = 1.4 y rf = 1.6 se ven distintos de a poco, y
-             * no hay ningun umbral donde el tamano salte de golpe. */
+            /* Cobertura: rampa lineal de un pixel, permite radio fraccionario. */
             float d = sqrtf(d2);
             float cov = rf - d + 0.5f;
             if (cov > 1.0f) cov = 1.0f;
 
-            /* Normal de la esferita. Fuera del disco geometrico (la banda de
-             * cobertura) se toma el borde, nz = 0, en vez de una raiz negativa. */
+            /* Normal de la esferita; en la banda de cobertura se toma el borde. */
             float un = dx * inv_rf, vn = dy * inv_rf;
             float rr = un * un + vn * vn;
             float nz = (rr < 1.0f) ? sqrtf(1.0f - rr) : 0.0f;
 
-            /* Profundidad propia: el polo de la bolita esta r_world mas cerca
-             * del ojo que su centro, asi dos bolitas que se solapan se recortan
-             * bien en vez de taparse enteras. */
+            /* Profundidad propia: el polo esta r_world mas cerca que el centro. */
             float z = depth - nz * r_world;
 
             if (z >= zbuf[k]) continue;                /* algo mas cerca ya esta */
 
-            /* Difusa local (el relieve de la bolita) modulada por k_world (de
-             * que lado de la esfera GRANDE esta), mas el brillo especular. */
+            /* Difusa local modulada por k_world (lado de la esfera grande). */
             float nd = un * BALL_LX + vn * BALL_LY + nz * BALL_LZ;
             if (nd < 0.0f) nd = 0.0f;
             float shade = k_world * (0.25f + 0.75f * nd);
@@ -304,9 +188,7 @@ static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float 
             uint32_t px = rgb_mul(color, shade);
             if (spec > 0.004f) px = rgb_lerp(px, 0xFFFFFFFFu, spec);
 
-            /* Con cobertura parcial se mezcla con lo que ya habia detras. El
-             * z-buffer solo se escribe si la bolita cubre mas de medio pixel:
-             * si apenas lo roza, no debe tapar a lo que venga despues. */
+            /* Solo tapa (escribe z) si cubre mas de medio pixel. */
             if (cov < 1.0f)  px = rgb_lerp(fb->px[k], px, cov);
             if (cov >= 0.5f) zbuf[k] = z;
 
@@ -315,36 +197,19 @@ static void draw_ball(Framebuffer *fb, float *zbuf, float cxf, float cyf, float 
     }
 }
 
-/* ==========================================================================
- *  render_points - NO se paraleliza (a proposito).
- *
- *  A diferencia de render_raycast/render_balls_raycast, aca el bucle externo
- *  recorre SEMILLAS, no pixeles: cada iteracion llama a draw_ball(), que hace
- *  read-modify-write sobre zbuf[k]/fb->px[k] para un rango de k que depende
- *  de donde cae la bolita en pantalla. Dos semillas que se solapan pueden
- *  escribir el mismo k desde dos hilos distintos -- una carrera de datos
- *  real, no potencial, y no hay forma de resolverla con un pragma simple
- *  (haria falta un lock por pixel o reordenar el algoritmo por completo).
- *
- *  Tampoco vale la pena: este kernel tiene costo casi CONSTANTE en N (ver el
- *  comentario de render_balls_raycast mas abajo), asi que ni siquiera es el
- *  kernel que el proyecto necesita medir. Es el ejemplo concreto de "tiene
- *  un bucle" != "es paralelizable sin rediseño".
- * ========================================================================== */
+/* --raster 1: bolitas rasterizadas. Costo ~O(1) en N y con carrera en el
+ * z-buffer si se paralelizara por semillas: es plan B, no el kernel a medir. */
 static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
 {
     const int w = fb->w, h = fb->h;
     fb_clear(fb, RENDER_BG);
 
-    /* z-buffer del frame: profundidad por pixel, +inf = vacio. Se pide y se
-     * libera aqui mismo para no dejar estado global ni fugas entre frames. */
+    /* z-buffer del frame: se pide y se libera aca, sin estado global. */
     float *zbuf = (float *)malloc((size_t)w * (size_t)h * sizeof(float));
     if (zbuf == NULL) return;                 /* sin z-buffer no dibujamos, no crash */
     const size_t npx = (size_t)w * (size_t)h;
     for (size_t i = 0; i < npx; ++i) zbuf[i] = INFINITY;
 
-    /* Colores de ESTE instante. Si la deriva esta apagada (o falla el malloc)
-     * se usan los fijos del SeedSet. */
     uint32_t       *anim_col = frame_colors(s, cfg, t);
     const uint32_t *col      = (anim_col != NULL) ? anim_col : s->color;
 
@@ -352,35 +217,20 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
     const float aspect = (float)w / (float)h;
     const float cam_dist = v3_len(cam.origin);   /* la camara mira al origen */
 
-    /* Giro del frame: rotacion alrededor de Y por el tiempo, mas una
-     * inclinacion fija en X para que la esfera no se vea plana de frente. */
+    /* Giro por tiempo en Y, mas inclinacion fija en X para el encuadre. */
     const float ang  = (float)(t * ((cfg != NULL) ? cfg->rot_speed : SS_DEF_ROT_SPEED));
     const float sy   = sinf(ang),  cyv = cosf(ang);
-    const float tilt = 0.42f;                 /* ~24 grados de encuadre, fijo */
+    const float tilt = 0.42f;
     const float stx  = sinf(tilt), ctx = cosf(tilt);
 
-    /* Luz difusa fija en el espacio del mundo: da volumen a la esfera y hace
-     * que el lado opuesto se vea mas oscuro. */
-    const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));
+    const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));   /* luz fija en el mundo */
 
-    /* Radio de la bolita en pixeles. NO es un numero a ojo: en un empaque
-     * hexagonal sobre la esfera cada semilla ocupa 4*pi/N de area, y de ahi la
-     * distancia al vecino mas cercano sale d = sqrt(8*pi/(sqrt(3)*N)) ~
-     * 3.81/sqrt(N) radianes. Para que las bolitas se TOQUEN el radio tiene que
-     * ser d/2 ~ 1.9/sqrt(N). Con el 1.0/sqrt(N) que habia antes las bolitas
-     * salian a la mitad de tamano y por eso la esfera se veia como puntos
-     * sueltos en vez del empaque compacto de la referencia.
-     *
-     * BALL_FILL se queda un poco abajo del 1.9 teorico: al llegar al borde de
-     * la silueta el escorzo junta las bolitas, y con el valor exacto el borde
-     * se empasta. */
     const float sphere_px = (cfg != NULL ? (float)cfg->sphere_frac : (float)SS_DEF_FILL)
                             * (float)h * 0.5f;
     float radius = ball_world_radius(s->n) * sphere_px;
     if (radius < 0.5f) radius = 0.5f;      /* mas chico que esto ya no se ve */
 
     for (int idx = 0; idx < s->n; ++idx) {
-        /* Posicion rotada de la semilla (sigue sobre la esfera unitaria). */
         Vec3 p = seed_pos(s, idx);
         p = v3_rot_y(p, sy, cyv);
         p = v3_rot_x(p, stx, ctx);
@@ -398,19 +248,13 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
         float sx    = (ndc_x * 0.5f + 0.5f) * (float)w;
         float sy_px = (1.0f - (ndc_y * 0.5f + 0.5f)) * (float)h;
 
-        /* Sombreado difuso: la normal en la esfera unitaria ES la posicion. */
+        /* Sobre la esfera unitaria la normal ES la posicion. */
         float diff = v3_dot(p, light);
         if (diff < 0.0f) diff = 0.0f;
         float k = 0.28f + 0.72f * diff;               /* piso ambiente + difusa */
 
-        /* Radio con perspectiva: las bolitas del frente se ven mas grandes que
-         * las del fondo. Sin esto todas salen del mismo tamano y la esfera se
-         * aplana. cam_dist/cz es el factor de escala de la proyeccion. Queda en
-         * float: redondearlo a pixeles enteros es lo que dibujaba el anillo. */
+        /* Radio con perspectiva, en float: redondearlo dibujaba un anillo. */
         float rf = radius * (cam_dist / cz);
-
-        /* Radio de la bolita en unidades de MUNDO, para su z-buffer propio:
-         * sphere_px pixeles equivalen a 1 radio de la esfera grande. */
         float r_world = radius / sphere_px;
 
         draw_ball(fb, zbuf, sx, sy_px, rf, cz, r_world, col[idx], k);
@@ -420,29 +264,11 @@ static void render_points(Framebuffer *fb, const SeedSet *s, const Config *cfg, 
     free(zbuf);
 }
 
-/* ==========================================================================
- *  rotate_seeds - rota las N semillas UNA vez por frame a un buffer aparte.
- *
- *  Con N << W*H (el caso normal, N por defecto es 128) sale mucho mas barato
- *  rotar las N semillas una sola vez que rotar el rayo de cada uno de los
- *  W*H pixeles (docs/01-FUNDAMENTO-MATEMATICO.md, seccion 3.1).
- *
- *  Importante: este buffer es SOLO para el render de este frame. No toca
- *  s->ax/ay/az, que son el estado persistente de la fisica (physics.c) --
- *  pisarlos aca romperia la integracion de Verlet entre frames.
- * ========================================================================== */
-/* 'rr' es opcional (puede ser NULL): solo hace falta cuando alguna semilla
- * puede NO estar sobre la esfera unitaria (modo canon, bolitas en pleno
- * vuelo). Cuando es NULL no se calcula nada extra -- el resto de los modos
- * no pagan este costo si nunca lo necesitan. */
+/* Rota las N semillas una vez por frame; rr[i] = |p|^2 (opcional, modo canon). */
 static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float ctx,
                          float *rx, float *ry, float *rz, float *rr)
 {
-    /* Cada 'i' escribe solo rx/ry/rz/rr[i] y lee solo la semilla 'i': sin
-     * dependencias y con carga uniforme, o sea static exacto. Es O(N) contra
-     * el O(P*N) del kernel, asi que no mueve la aguja por si solo -- entra
-     * porque es fraccion serial, y la fraccion serial es lo que le pone techo
-     * a Amdahl. Debajo de RENDER_PAR_MIN se salta solo. */
+    /* Sin dependencias y carga uniforme: static exacto. */
     #pragma omp parallel for schedule(static) if(s->n >= RENDER_PAR_MIN)
     for (int i = 0; i < s->n; ++i) {
         Vec3 p = seed_pos(s, i);
@@ -455,17 +281,12 @@ static void rotate_seeds(const SeedSet *s, float sy, float cyv, float stx, float
     }
 }
 
-/* ==========================================================================
- *  render_raycast - el kernel dominante: raycasting por pixel con Voronoi
- *  esferico. Ver docs/01-FUNDAMENTO-MATEMATICO.md seccion 4.
- * ========================================================================== */
+/* --voronoi 1: celdas de Voronoi esferico por pixel, O(P*N). Ver docs/01 sec 4. */
 static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
 {
     const int w = fb->w, h = fb->h;
 
-    /* Buffer de semillas rotadas para este frame. Un malloc por frame, igual
-     * que el z-buffer de render_points: es codigo secuencial deliberadamente
-     * simple, la version paralela decide si vale la pena reciclarlo. */
+    /* Semillas rotadas de este frame. */
     float *rx = (float *)malloc((size_t)s->n * sizeof(float));
     float *ry = (float *)malloc((size_t)s->n * sizeof(float));
     float *rz = (float *)malloc((size_t)s->n * sizeof(float));
@@ -475,14 +296,13 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
         return;                                        /* sin memoria, no crash */
     }
 
-    /* Colores de ESTE instante, una vez por frame y NO por pixel: el bucle
-     * caliente solo indexa col[winner], igual que antes indexaba s->color. */
+    /* Una vez por frame, no por pixel: el bucle caliente solo indexa col[]. */
     uint32_t       *anim_col = frame_colors(s, cfg, t);
     const uint32_t *col      = (anim_col != NULL) ? anim_col : s->color;
 
     const float ang  = (float)(t * ((cfg != NULL) ? cfg->rot_speed : SS_DEF_ROT_SPEED));
     const float sy   = sinf(ang),  cyv = cosf(ang);
-    const float tilt = 0.42f;                 /* mismo encuadre que render_points */
+    const float tilt = 0.42f;                 /* mismo encuadre que los otros modos */
     const float stx  = sinf(tilt), ctx = cosf(tilt);
     rotate_seeds(s, sy, cyv, stx, ctx, rx, ry, rz, rr);
 
@@ -490,18 +310,10 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
     const Vec3 center = v3(0.0f, 0.0f, 0.0f);
     const float radius = 1.0f;                          /* esfera unitaria */
 
-    /* Misma luz fija en el mundo que usaba render_points, para que el look
-     * no cambie al alternar --voronoi. */
-    const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));
-
-    /* Ancho del borde de celda para ESTE N (ver EDGE_FRAC arriba). Se calcula
-     * una vez por frame, no por pixel. */
+    const Vec3 light = v3_norm(v3(-0.4f, 0.6f, 0.7f));  /* la luz de siempre */
     const float edge_w = edge_width_for(s->n);
 
-    /* Misma forma exacta que render_balls_raycast: escritura unica por pixel,
-     * todo lo que declara el cuerpo esta adentro del bucle, sin z-buffer ni
-     * acumulador. Mismo pragma y mismo schedule elegido con datos en
-     * render_balls_raycast (ver ese comentario para los numeros medidos). */
+    /* Mismo schedule que render_balls_raycast (ver la tabla medida ahi). */
     #pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
@@ -513,23 +325,12 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
                 continue;                               /* rayo de fondo, ~10 ciclos */
             }
 
-            /* Punto de impacto y su normal. Sobre la esfera unitaria
-             * centrada en el origen, la normal ES el punto -- no hace falta
-             * normalizar de nuevo. */
+            /* Sobre la esfera unitaria centrada en el origen, la normal ES q. */
             Vec3 q   = v3_madd(cam.origin, d, thit);
             Vec3 nrm = q;
 
-            /* --- Voronoi esferico: el bucle interno, O(N) ------------------
-             * Se maximiza el producto punto en vez de minimizar la distancia
-             * geodesica (que pediria acos): son equivalentes porque acos es
-             * monotona decreciente, y evitamos un acos por semilla por pixel.
-             *
-             * En modo canon, una bolita en pleno vuelo (o un fantasma de
-             * estela) no esta sobre la esfera unitaria y no le corresponde
-             * ninguna celda: se descarta con rr[k], que ya se calculo en
-             * rotate_seeds sin costo extra de lectura. La tolerancia es floja
-             * a proposito -- solo hace falta distinguir "aterrizada" (rr=1)
-             * de "en vuelo" (rr<1), no medir con precision. */
+            /* Maximizar el producto punto == minimizar la geodesica, sin acos.
+             * rr[k] < 1 = bolita en vuelo (modo canon): no tiene celda. */
             float best1 = -2.0f, best2 = -2.0f;
             int   winner = 0;
             int   hay_ganador = 0;
@@ -544,16 +345,13 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
                 continue;
             }
 
-            /* Sombreado: Lambert difuso + piso ambiente, mismas constantes
-             * que render_points para que el brillo no cambie entre modos. */
+            /* Lambert + piso ambiente, mismas constantes que los otros kernels. */
             float lambert = v3_dot(nrm, light);
             if (lambert < 0.0f) lambert = 0.0f;
             float k_shade = 0.28f + 0.72f * lambert;
             uint32_t base = rgb_mul(col[winner], k_shade);
 
-            /* Borde de celda: best1-best2 es chico exactamente en la
-             * frontera entre dos celdas, asi que un smoothstep sobre esa
-             * diferencia da antialiasing analitico sin detectar aristas. */
+            /* best1-best2 es chico en la frontera: smoothstep = antialiasing. */
             float edge = f_smoothstep(0.0f, edge_w, best1 - best2);
             fb->px[j * w + i] = rgb_lerp(RENDER_BG, base, edge);
         }
@@ -563,65 +361,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
     free(rx); free(ry); free(rz); free(rr);
 }
 
-/* ==========================================================================
- *  render_balls_raycast - las MISMAS bolitas, pero resueltas por pixel.
- *
- *  Por que existe, si render_points ya las dibujaba: porque el rasterizado
- *  tiene un costo casi CONSTANTE en N y por lo tanto no sirve para lo que este
- *  proyecto mide. El radio va como 1/sqrt(N), o sea el area de cada bolita va
- *  como 1/N, y hay N bolitas: el area total pintada NO depende de N. Medido a
- *  1280x720, multiplicar N por 1562 (de 128 a 200000) solo multiplica el costo
- *  por 4.8, y ese poco que crece es el bucle O(N) de proyectar, no los pixeles.
- *  Con ese kernel, N no es una perilla de carga.
- *
- *  Ademas el rasterizado NO se puede paralelizar por semillas tal cual: dos
- *  bolitas que se solapan hacen read-modify-write del mismo z-buffer, que es
- *  una carrera de datos.
- *
- *  Invertir el bucle arregla las dos cosas de un golpe: pasa a ser O(P*N) --
- *  el mismo modelo de costo que el Voronoi -- y cada pixel es independiente,
- *  asi que el 'parallel for' entra sin carreras, sin atomicos y sin z-buffer.
- *  La imagen ademas MEJORA: la oclusion entre bolitas pasa a ser exacta por
- *  pixel en vez de aproximada con profundidad por pixel.
- *
- *  ---- el test rayo-esfera, barato ----------------------------------------
- *  Un test generico cuesta ~16 flops por semilla. Aca sale mas barato usando
- *  algo que este problema regala: la camara esta en el eje z, O = (0,0,dist).
- *
- *      |C - O|^2 = |C|^2 - 2*dist*C.z + dist^2   <- un solo madd desde C.z
- *      b         = (C - O).d = C.d - dist*d.z    <- el producto punto de siempre
- *      perp^2    = |C - O|^2 - b^2               <- distancia rayo-centro
- *
- *  y pega si perp^2 < r^2. O sea: el mismo producto punto C.d que ya hace el
- *  Voronoi, mas tres operaciones. El sqrt aparece UNA vez por pixel (para la
- *  bolita ganadora), no una vez por semilla.
- *
- *  Nota sobre |C|^2: cuando TODAS las semillas estan sobre la esfera unitaria
- *  (el caso de siempre, sin canones), |C|^2 = 1 y esto era una constante
- *  compartida por todas. Con el modo canon una bolita en vuelo tiene |C| < 1,
- *  asi que |C|^2 pasa a leerse del arreglo rr[] (llenado en rotate_seeds
- *  junto con rx/ry/rz) en vez de ser una constante -- una carga y una resta
- *  mas por semilla, ~10% segun lo medido en la Fase 3 del modo canon.
- * ========================================================================== */
-
-/* ---------------------------------------------------------------------------
- *  Sombreado de un impacto. Son DOS niveles multiplicados, igual que en el
- *  rasterizado, y el de afuera no es decorativo:
- *
- *    k_world  de que lado de la esfera GRANDE esta la semilla. Funciona como
- *             una oclusion ambiental barata -- una bolita del lado oscuro esta
- *             rodeada de vecinas que le tapan la luz -- y es lo unico que le da
- *             VOLUMEN al conjunto. Sin este factor cada bolita se ilumina solo
- *             por su propia normal, todas quedan igual de brillantes y la
- *             esfera se aplana: se ve como un mosaico de bolitas y no como un
- *             objeto redondo.
- *    relieve   la normal VERDADERA de la bolita en el punto de impacto. Aca
- *             esta la mejora sobre el rasterizado, que la reconstruia en el
- *             espacio del disco: esta es exacta y con perspectiva correcta.
- *
- *  Las constantes son las mismas que usaba render_points a proposito, para que
- *  cambiar de kernel no cambie el look.
- * ------------------------------------------------------------------------- */
+/* Sombreado de un impacto: lado de la esfera grande (kw) por relieve propio. */
 static uint32_t shade_ball(Vec3 center, Vec3 nrm, Vec3 dir, Vec3 light, uint32_t color)
 {
     float kw = v3_dot(center, light);         /* la normal de la esfera grande */
@@ -633,7 +373,7 @@ static uint32_t shade_ball(Vec3 center, Vec3 nrm, Vec3 dir, Vec3 light, uint32_t
 
     uint32_t px = rgb_mul(color, kw * (0.25f + 0.75f * nd));
 
-    /* Vector medio de Blinn-Phong: L + V, con V = -dir (del punto hacia el ojo). */
+    /* Vector medio de Blinn-Phong: L + V, con V = -dir. */
     Vec3  hv = v3_norm(v3_sub(light, dir));
     float nh = v3_dot(nrm, hv);
     if (nh > 0.0f) {
@@ -643,6 +383,8 @@ static uint32_t shade_ball(Vec3 center, Vec3 nrm, Vec3 dir, Vec3 light, uint32_t
     return px;
 }
 
+/* Kernel por defecto: las bolitas por raycasting, O(P*N) y sin z-buffer.
+ * Test barato con O = (0,0,dist): perp^2 = |C-O|^2 - b^2, un sqrt por pixel. */
 static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
                                  const Config *cfg, double t)
 {
@@ -673,79 +415,25 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     const float r  = ball_world_radius(s->n);
     const float r2 = r * r;
 
-    /* |C-O|^2 no depende del rayo: es el mismo valor para los W*H pixeles,
-     * pero se estaba recalculando DENTRO del bucle por pixel. Se saca aca en
-     * una pasada O(N) por frame y rr[] pasa a guardarlo, en vez de |C|^2.
-     *
-     * Se puede pisar rr[] en el sitio porque en ESTE kernel solo se usaba
-     * dentro de esa cuenta -- el que lo lee como |C|^2 para descartar bolitas
-     * en vuelo es render_raycast, que tiene su propio buffer. Ademas de dos
-     * flops menos por pixel y por semilla, el bucle interno deja de leer
-     * rz[] y baja de cuatro arreglos a tres. */
+    /* |C-O|^2 no depende del rayo: se precalcula aca y rr[] pasa a guardarlo. */
     const float dist2 = dist * dist;
     #pragma omp parallel for schedule(static) if(s->n >= RENDER_PAR_MIN)
     for (int k = 0; k < s->n; ++k)
         rr[k] = rr[k] + dist2 - 2.0f * dist * rz[k];
 
-    /* Tamano de un pixel en unidades de mundo, por unidad de profundidad. Es
-     * lo que convierte la distancia rayo-centro en COBERTURA, que es lo que da
-     * el borde suave: la misma rampa de un pixel del rasterizado, pero medida
-     * en el mundo en vez de en la pantalla. */
+    /* Tamano de un pixel en unidades de mundo, por unidad de profundidad. */
     const float pix_k = 2.0f * cam.tan_half_fov / (float)h;
 
-    /* El pragma que importa: cada iteracion 'j' escribe exactamente una fila
-     * de pixeles unicos (fb->px[j*w+i]), y todo lo que el cuerpo declara
-     * (d, thit, t1, p1, w1, t2, w2, od, c1, q, nrm, px, cov, y las del bloque
-     * de cobertura) esta declarado ADENTRO del bucle -- por eso OpenMP las
-     * hace privadas solo, sin que haga falta enumerar una sola en 'private'.
-     * No hay reduccion ni acumulador: el z-buffer que si tendria carrera es
-     * el de render_points(), y este kernel se invirtio (pixeles afuera,
-     * semillas adentro) precisamente para no necesitarlo.
-     *
-     * schedule(dynamic, 1) y no static: hay DOS fuentes de desbalance y
-     * static no absorbe ninguna.
-     *
-     *   1) Geometrica. El rechazo temprano contra la esfera envolvente deja
-     *      filas enteras casi gratis (las de arriba/abajo de la silueta) y
-     *      concentra el trabajo real en la banda central.
-     *   2) Del hardware. Esta CPU es hibrida: 8 P-cores + 16 E-cores. Un
-     *      E-core tarda casi el doble en el MISMO bloque de filas, asi que
-     *      los P-cores terminan temprano y esperan en la barrera.
-     *
-     * Medido con schedule(runtime) + OMP_SCHEDULE, 24 hilos, 4 repeticiones
-     * (mediana en ms):
-     *
-     *                    N=900     N=10000
-     *     static          36.12     363.15   <- el peor reparto real
-     *     static,1        30.16     314.31   <- round-robin: absorbe (1) pero
-     *                                           no (2), no sabe que un core
-     *                                           es mas lento
-     *     static,8        31.75     326.19
-     *     dynamic,1       27.88     285.48   <- elegido
-     *     dynamic,4       29.54     284.87
-     *     dynamic,16      33.23     328.32   <- bloque muy grande, vuelve a
-     *                                           parecerse a static
-     *     guided          29.56     295.52
-     *     auto            38.01     374.48   <- gcc lo mapea a static
-     *
-     * Solo dynamic absorbe (2), porque el hilo que termina primero vuelve por
-     * mas trabajo sin que nadie tenga que saber de antemano que core es.
-     *
-     * OJO: una medicion anterior (--threads 16 --cannons 10, otro build) daba
-     * guided como ganador y por eso este pragma decia guided. A 24 hilos NO se
-     * reproduce. dynamic,1 y dynamic,4 empatan a N grande; dynamic,1 gana a N
-     * chico y tiene menos varianza, asi que sirve para las dos escalas.
-     *
-     * Sin -fopenmp este pragma es inerte: screensaver_seq no cambia. */
+    /* Cada 'j' escribe una fila propia y todo el cuerpo es local: sin carreras.
+     * dynamic,1 y no static por el desbalance geometrico (filas fuera de la
+     * silueta) y por la CPU hibrida P/E-cores: a 24 hilos y N=10000, static
+     * da 363 ms y dynamic,1 285 ms (guided 296, dynamic,16 328). */
     #pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);
 
-            /* Rechazo del fondo: si el rayo ni siquiera roza la esfera que
-             * ENVUELVE a las bolitas (radio 1 + r), no hay nada que probar y
-             * nos ahorramos las N iteraciones. Es el mismo truco con el que el
-             * Voronoi descarta el fondo en ~10 ciclos. */
+            /* Rechazo del fondo contra la esfera envolvente: ahorra las N. */
             float thit;
             if (!ray_sphere_hit(cam.origin, d, v3(0.0f, 0.0f, 0.0f), 1.0f + r, &thit)) {
                 fb->px[j * w + i] = RENDER_BG;
@@ -754,11 +442,8 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
 
             const float od = dist * d.z;      /* O.d, con O sobre el eje z */
 
-            /* Las DOS bolitas mas cercanas al ojo sobre este rayo. La segunda
-             * solo se usa para el borde suave: en el pixel donde la de adelante
-             * cubre medio pixel, lo que asoma detras es su vecina, no el fondo,
-             * y mezclar contra el fondo dibujaria una costura negra en cada
-             * contacto. */
+            /* Las DOS mas cercanas: la segunda es lo que asoma en el borde
+             * suave, y mezclar contra el fondo dibujaria una costura negra. */
             float t1 = INFINITY, p1 = 0.0f;  int w1 = -1;
             float t2 = INFINITY;             int w2 = -1;
 
@@ -766,11 +451,7 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
                 float b = rx[k] * d.x + ry[k] * d.y + rz[k] * d.z - od;
                 if (b <= 0.0f) continue;                  /* bolita detras del ojo */
 
-                /* rr[k] ya ES |C-O|^2, precalculado arriba una vez por frame.
-                 * Sigue valiendo en modo canon: la cuenta partia de |C|^2 real
-                 * y no de la constante 1, asi que una bolita en pleno vuelo
-                 * (|C| < 1) queda igual de bien resuelta que antes. */
-                float perp2 = rr[k] - b * b;
+                float perp2 = rr[k] - b * b;              /* rr[k] ya es |C-O|^2 */
                 if (perp2 >= r2) continue;                /* el rayo pasa de largo */
 
                 float tt = b - sqrtf(r2 - perp2);         /* cara de adelante */
@@ -814,14 +495,7 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
     free(rx); free(ry); free(rz); free(rr);
 }
 
-/* ==========================================================================
- *  render_frame - despacha entre los tres kernels. La firma es el contrato
- *  con main.c y no cambia (ver render.h).
- *
- *      --voronoi 1   celdas de Voronoi por raycasting      O(P*N)
- *      (por defecto) bolitas por raycasting                O(P*N)
- *      --raster 1    bolitas rasterizadas (plan B barato)  ~O(1) en N
- * ========================================================================== */
+/* Despacho entre los tres kernels; la firma es el contrato con main.c. */
 void render_frame(Framebuffer *fb, const SeedSet *s, const Config *cfg, double t)
 {
     if (fb == NULL || fb->px == NULL || s == NULL) return;

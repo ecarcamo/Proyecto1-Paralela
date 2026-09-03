@@ -1,26 +1,6 @@
-/* ===========================================================================
- *  main.c - Bucle principal: SDL, textura y presentacion. La primera imagen.
- *
- *  A partir de este archivo el proyecto deja de ser abstracto: se abre una
- *  ventana y la esfera de Fibonacci gira con su contador de FPS. El pipeline
- *  es deliberadamente simple:
- *
- *      parse args -> validar -> alloc SeedSet -> sphere_fill_fibonacci()
- *      SDL_Init -> ventana -> renderer -> textura ARGB8888 STREAMING
- *      bucle:  eventos -> render_frame -> overlay_stats -> subir textura
- *              -> present -> medir dt -> media movil de FPS
- *      liberar TODO (incluso en los caminos de error) -> SDL_Quit
- *
- *  La rubrica califica el "manejo adecuado de inicializacion y destruccion de
- *  objetos y memoria". Por eso hay un solo 'goto cleanup': libera todo en el
- *  orden inverso al de creacion, y como cada recurso arranca en NULL/cero,
- *  saltar ahi desde cualquier punto es seguro.
- *
- *  Nota macOS: SDL exige que el bucle de eventos corra en el hilo principal.
- *  Aca corre en main(), asi que no hay nada que mover.
- *
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* main.c - Bucle principal: SDL, textura y presentacion.
+ * Un solo 'goto cleanup' libera todo en orden inverso a la creacion; como cada
+ * recurso arranca en NULL/cero, saltar ahi desde cualquier punto es seguro. */
 #include <SDL.h>
 
 #include <stdio.h>
@@ -39,20 +19,10 @@
 #include "sphere.h"
 #include "timing.h"
 
-/* Paso del barrido del angulo con las teclas [ y ], en radianes (~0.5 grados).
- * Es fino a proposito: al cruzar despacio el angulo aureo el patron colapsa a
- * rayas y vuelve a explotar, y ese es el mejor momento de la presentacion. */
+/* Paso de las teclas [ y ]: fino para ver el patron colapsar y rearmarse. */
 #define ANGLE_STEP_RAD  (0.5 * SS_PI / 180.0)
 
-/* --------------------------------------------------------------------------
- *  Rellena (o vuelve a llenar) la esfera con el angulo actual de la Config.
- *  Se usa al arrancar y cada vez que una tecla cambia el angulo.
- *
- *  Con --cannons K esto NO alcanza para animar la construccion: solo pinta el
- *  instante t=0 (una sola bolita recien disparada). El bucle con ventana
- *  llama a cannon_update() ademas de esto, en cada frame, para que la esfera
- *  se siga construyendo con el tiempo.
- * -------------------------------------------------------------------------- */
+/* Rellena la esfera con el angulo actual; con canones solo pinta t = 0. */
 static void regen_sphere(SeedSet *seeds, const Config *cfg)
 {
     if (cfg->cannon) {
@@ -63,12 +33,7 @@ static void regen_sphere(SeedSet *seeds, const Config *cfg)
     }
 }
 
-/* --------------------------------------------------------------------------
- *  Reescribe el SoA para el instante 'sim_t' del modo canon. Se llama una vez
- *  por frame, ANTES de render_frame(): la posicion es funcion pura de t, asi
- *  que no hace falta ningun estado entre llamadas (ver sphere.h). No-op si
- *  sin --cannons.
- * -------------------------------------------------------------------------- */
+/* Reescribe el SoA para el instante sim_t; no-op sin --cannons. */
 static void cannon_update(SeedSet *seeds, const Config *cfg, double sim_t)
 {
     if (!cfg->cannon) return;
@@ -76,23 +41,7 @@ static void cannon_update(SeedSet *seeds, const Config *cfg, double sim_t)
     sphere_fill_cannon(seeds, &cp, sim_t);
 }
 
-/* ==========================================================================
- *  Camino de verificacion: un unico frame, volcado crudo a stdout, sin SDL.
- *
- *  Existe para comparar screensaver_seq contra screensaver_omp bit a bit en
- *  el mismo instante t: como todo el estado del frame es funcion pura de
- *  (i, t) -- sin historial de particulas, sin fisica cuando hay canones --
- *  los dos binarios tienen que producir exactamente el mismo framebuffer,
- *  con cualquier numero de hilos.
- *
- *      ./bin/screensaver_seq --n 2000 --dump-frame 12.5 > seq.raw
- *      ./bin/screensaver_omp --n 2000 --threads 32 --dump-frame 12.5 > omp.raw
- *      cmp seq.raw omp.raw && echo IDENTICOS
- *
- *  Reusa seedset_alloc/fb_alloc/regen_sphere/render_frame: no hay logica de
- *  render duplicada, solo el cableado para escribir el resultado a stdout
- *  en vez de a una ventana.
- * ========================================================================== */
+/* --dump-frame T: un frame crudo a stdout, para comparar seq vs omp con cmp. */
 static int run_dump_frame(Config *cfg)
 {
     SeedSet     seeds = {0};
@@ -115,8 +64,7 @@ static int run_dump_frame(Config *cfg)
 
     render_frame(&fb, &seeds, cfg, cfg->dump_frame_t);
 
-    /* Crudo, sin ningun encabezado: el 'cmp' de dos volcados con el mismo
-     * w/h/formato ya alcanza. fwrite en un solo llamado, tamano fijo. */
+    /* Sin encabezado: el cmp de dos volcados del mismo w/h/formato ya alcanza. */
     size_t n_px = (size_t)fb.w * (size_t)fb.h;
     size_t wrote = fwrite(fb.px, sizeof(uint32_t), n_px, stdout);
     if (wrote != n_px) {
@@ -132,10 +80,7 @@ cleanup:
     return rc;
 }
 
-/* ==========================================================================
- *  Camino headless: sin ventana, para medir el costo por frame (--no-render,
- *  --bench). No abre SDL. Sirve al protocolo de medicion de docs/02.
- * ========================================================================== */
+/* Camino headless (--no-render, --bench): mide sin abrir SDL. */
 static int run_headless(Config *cfg)
 {
     SeedSet     seeds = {0};
@@ -167,13 +112,10 @@ cleanup:
     return rc;
 }
 
-/* ==========================================================================
- *  Camino con ventana: SDL + el bucle principal.
- * ========================================================================== */
+/* Camino con ventana: SDL + el bucle principal. */
 static int run_window(Config *cfg)
 {
-    /* Todos en estado neutro para que 'goto cleanup' sea seguro desde cualquier
-     * punto de fallo. */
+    /* Todos en estado neutro: 'goto cleanup' es seguro desde cualquier fallo. */
     SeedSet       seeds    = {0};
     Framebuffer   fb       = {0};
     SDL_Window   *window   = NULL;
@@ -218,8 +160,7 @@ static int run_window(Config *cfg)
         goto cleanup;
     }
 
-    /* ARGB8888 STREAMING: mismo formato que el framebuffer, asi subirlo es un
-     * memcpy que hace SDL_UpdateTexture sin conversion por pixel. */
+    /* ARGB8888 STREAMING: mismo formato que el fb, subirlo es un memcpy. */
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
                                 SDL_TEXTUREACCESS_STREAMING,
                                 cfg->width, cfg->height);
@@ -236,7 +177,7 @@ static int run_window(Config *cfg)
     int    primer_frame = 1;                 /* su dt no es un frame real */
 
     while (running) {
-        /* -- eventos (en el hilo principal, como exige macOS) ------------ */
+        /* Eventos: en el hilo principal, como exige macOS. */
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) {
@@ -269,18 +210,14 @@ static int run_window(Config *cfg)
             }
         }
 
-        /* -- tiempo: dt real, y avance de la animacion solo si no esta en pausa */
+        /* Tiempo: dt real; la animacion avanza solo si no esta en pausa. */
         double now = now_seconds();
         double dt  = now - last;
         last = now;
         if (!cfg->paused) sim_t += dt;
 
-        /* -- fisica: repulsion de Coulomb + Verlet, solo si esta activa y no
-         *    en pausa. El clamp NO es un 0.1 fijo: el limite de estabilidad de
-         *    Verlet depende de N (va como 1/sqrt(N), ver physics_max_dt). Con
-         *    un tope fijo y N grande la integracion explota y el patron de
-         *    Fibonacci se deshace en menos de un segundo. Pasado el tope la
-         *    fisica avanza en camara lenta, que es preferible a que reviente. */
+        /* Fisica: el tope de dt depende de N (1/sqrt(N), ver physics_max_dt);
+         * pasado el tope avanza en camara lenta en vez de explotar. */
         if (!cfg->paused && cfg->physics) {
             double dt_max  = physics_max_dt(seeds.n);
             double dt_phys = (dt < dt_max) ? dt : dt_max;
@@ -289,12 +226,10 @@ static int run_window(Config *cfg)
             physics_step(&seeds, &pp, dt_phys);
         }
 
-        /* -- canon: reescribe el SoA para este instante, funcion pura de
-         *    sim_t (ver sphere.h). En pausa sim_t no avanza, asi que la
-         *    construccion se congela sola sin codigo extra aca. */
+        /* Canon: funcion pura de sim_t, asi que la pausa lo congela sola. */
         cannon_update(&seeds, cfg, sim_t);
 
-        /* -- dibujo: render_frame se lleva el ~90% del tiempo ------------ */
+        /* Dibujo: render_frame se lleva el ~90% del tiempo. */
         render_frame(&fb, &seeds, cfg, sim_t);
         overlay_stats(&fb, cfg, fps_ema, seeds.n);
         if (cfg->physics) {
@@ -302,16 +237,13 @@ static int run_window(Config *cfg)
             overlay_physics(&fb, cfg, div);
         }
 
-        /* -- presentar --------------------------------------------------- */
+        /* Presentar. */
         SDL_UpdateTexture(texture, NULL, fb.px, fb.w * (int)sizeof(uint32_t));
         SDL_RenderCopy(renderer, texture, NULL, NULL);
         SDL_RenderPresent(renderer);
 
-        /* -- FPS: media movil exponencial sobre el dt instantaneo.
-         *    El primer frame NO cuenta: su 'dt' solo mide el tiempo entre que
-         *    se armo el reloj y el primer PollEvent (microsegundos), no un
-         *    frame de verdad. Sembrar la media con eso mostraba FPS de decenas
-         *    de miles durante los primeros segundos. */
+        /* FPS: media movil exponencial. El primer frame no cuenta, su dt no
+         * es un frame real y sembraba la media con decenas de miles. */
         if (dt > 0.0 && !primer_frame) {
             double inst = 1.0 / dt;
             fps_ema = (fps_ema > 0.0) ? (fps_ema * 0.9 + inst * 0.1) : inst;
@@ -336,7 +268,7 @@ int main(int argc, char **argv)
 {
     Config cfg;
 
-    /* 1) argumentos: --help sale con exito; un error sale con EXIT_FAILURE. */
+    /* 1) argumentos: --help sale con exito, un error con EXIT_FAILURE. */
     ArgsStatus st = args_parse(argc, argv, &cfg);
     if (st == ARGS_HELP)  return EXIT_SUCCESS;
     if (st != ARGS_OK)    return EXIT_FAILURE;
@@ -344,20 +276,16 @@ int main(int argc, char **argv)
     /* 2) validacion cruzada del dominio (N, canvas, fill, ...). */
     if (config_validate(&cfg) != 0) return EXIT_FAILURE;
 
-    /* 2.5) hilos de OpenMP, ANTES de que exista cualquier region paralela.
-     *    El #ifdef es lo que permite que este mismo main.c compile en
-     *    screensaver_seq sin -fopenmp: el bloque entero desaparece. */
+    /* 2.5) hilos de OpenMP, antes de cualquier region paralela. */
 #ifdef _OPENMP
     if (cfg.threads > 0) omp_set_num_threads(cfg.threads);
 #endif
 
-    /* 3) dejar registrado con que parametros se corrio -- salvo en modo CSV
-     *    o dump-frame, que redirigen stdout a un archivo y tienen que
-     *    quedar limpios: config_print() mezclado con los bytes crudos del
-     *    framebuffer romperia el 'cmp' byte a byte entre seq y omp. */
+    /* 3) registrar los parametros, salvo en CSV o dump-frame: ahi stdout
+     *    tiene que quedar limpio para el cmp byte a byte. */
     if (!cfg.csv && !cfg.dump_frame) config_print(&cfg);
 
-    /* 4) dispatch: volcado de verificacion, ventana, o headless para medir. */
+    /* 4) dispatch: volcado de verificacion, ventana o headless. */
     if (cfg.dump_frame) return run_dump_frame(&cfg);
     if (cfg.headless)   return run_headless(&cfg);
     return run_window(&cfg);

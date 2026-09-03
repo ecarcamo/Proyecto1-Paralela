@@ -1,7 +1,4 @@
-/* ===========================================================================
- *  metrics.c - Verificacion numerica de la calidad de la distribucion.
- *  Proyecto 1 - Computacion Paralela y Distribuida (UVG)
- * =========================================================================== */
+/* metrics.c - Verificacion numerica de la calidad de la distribucion. */
 #include "metrics.h"
 #include "config.h"
 #include "color.h"
@@ -9,10 +6,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-/* --------------------------------------------------------------------------
- *  Vecino mas cercano - O(N^2)
- * -------------------------------------------------------------------------- */
-
+/* Distancia al vecino mas cercano, O(N^2). */
 NeighborStats metrics_nearest_neighbor(const SeedSet *s)
 {
     NeighborStats st = { 0.0, 0.0, 0.0, 0.0, 0.0 };
@@ -24,9 +18,7 @@ NeighborStats metrics_nearest_neighbor(const SeedSet *s)
     double gmin = 1e300, gmax = 0.0;
 
     for (int i = 0; i < n; i++) {
-        /* Se busca el MAYOR producto punto, que equivale a la MENOR distancia
-         * geodesica: acos es monotona decreciente, asi que no hace falta
-         * calcularla. Es el mismo truco del bucle interno del Voronoi. */
+        /* Mayor producto punto == menor geodesica (acos es decreciente). */
         float xi = s->x[i], yi = s->y[i], zi = s->z[i];
         double best = -2.0;
 
@@ -37,8 +29,7 @@ NeighborStats metrics_nearest_neighbor(const SeedSet *s)
             if (d > best) best = d;
         }
 
-        /* Recien aca, una sola vez por semilla, se paga el acos para tener la
-         * distancia en unidades reales (radianes de arco sobre la esfera). */
+        /* El acos se paga una sola vez por semilla, para dar radianes de arco. */
         if (best >  1.0) best =  1.0;      /* redondeo puede pasarse */
         if (best < -1.0) best = -1.0;
         double dist = acos(best);
@@ -60,16 +51,13 @@ NeighborStats metrics_nearest_neighbor(const SeedSet *s)
     return st;
 }
 
-/* --------------------------------------------------------------------------
- *  Teorema de las tres distancias
- * -------------------------------------------------------------------------- */
-
 static int cmp_double(const void *a, const void *b)
 {
     double x = *(const double *)a, y = *(const double *)b;
     return (x > y) - (x < y);
 }
 
+/* Teorema de las tres distancias: cuenta longitudes de hueco distintas. */
 int metrics_three_distance(const SeedSet *s, double tol,
                            double *gap_out, int max_gaps)
 {
@@ -98,8 +86,7 @@ int metrics_three_distance(const SeedSet *s, double tol,
 
     qsort(gap, (size_t)n, sizeof(double), cmp_double);
 
-    /* Contar valores distintos con tolerancia. Como ya estan ordenados, basta
-     * comparar cada uno con el ultimo representante aceptado. */
+    /* Ya ordenados: basta comparar con el ultimo representante aceptado. */
     int    distinct = 0;
     double last     = -1e300;
 
@@ -116,10 +103,7 @@ int metrics_three_distance(const SeedSet *s, double tol,
     return distinct;
 }
 
-/* --------------------------------------------------------------------------
- *  Conteo de meridianos ocupados
- * -------------------------------------------------------------------------- */
-
+/* Meridianos ocupados: N con el angulo aureo, q con un angulo racional p/q. */
 int metrics_count_meridians(const SeedSet *s, double tol)
 {
     if (s == NULL || s->n < 1) return 0;
@@ -144,8 +128,8 @@ int metrics_count_meridians(const SeedSet *s, double tol)
         if (ang[i] - last > tol) { distinct++; last = ang[i]; }
     }
 
-    /* El primero y el ultimo pueden ser el mismo meridiano visto desde los dos
-     * lados del corte en 0. */
+    /* El primero y el ultimo pueden ser el mismo meridiano, visto desde los
+     * dos lados del corte en 0. */
     if (distinct > 1 &&
         (2.0 * SS_PI - ang[n - 1]) + ang[0] < tol) distinct--;
 
@@ -153,19 +137,13 @@ int metrics_count_meridians(const SeedSet *s, double tol)
     return distinct;
 }
 
-/* --------------------------------------------------------------------------
- *  Referencia lat-lon, para tener contra que comparar
- * -------------------------------------------------------------------------- */
-
+/* Referencia lat-lon (malla n_lat ~ sqrt(n/2)): la forma "obvia", para comparar. */
 void metrics_fill_latlon(SeedSet *s, int n)
 {
     if (s == NULL || n < 1 || n > s->capacity) return;
 
     s->n = n;
 
-    /* Malla lo mas cuadrada posible: n_lat ~ sqrt(n/2), n_lon ~ 2*n_lat.
-     * Es la forma "obvia" de repartir puntos sobre una esfera, y por eso es
-     * la comparacion justa. */
     int n_lat = (int)(sqrt((double)n / 2.0) + 0.5);
     if (n_lat < 1) n_lat = 1;
     int n_lon = (n + n_lat - 1) / n_lat;
