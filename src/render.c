@@ -502,7 +502,7 @@ static void render_raycast(Framebuffer *fb, const SeedSet *s, const Config *cfg,
      * todo lo que declara el cuerpo esta adentro del bucle, sin z-buffer ni
      * acumulador. Mismo pragma y mismo schedule elegido con datos en
      * render_balls_raycast (ver ese comentario para los numeros medidos). */
-    #pragma omp parallel for schedule(guided)
+    #pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);
@@ -702,27 +702,42 @@ static void render_balls_raycast(Framebuffer *fb, const SeedSet *s,
      * el de render_points(), y este kernel se invirtio (pixeles afuera,
      * semillas adentro) precisamente para no necesitarlo.
      *
-     * schedule(guided) y no static: el rechazo temprano contra la esfera
-     * envolvente deja filas enteras casi gratis (las de arriba/abajo de la
-     * silueta) y concentra el trabajo real en la banda central. Con static
-     * los hilos de los extremos terminarian de inmediato y quedarian
-     * esperando en la barrera.
+     * schedule(dynamic, 1) y no static: hay DOS fuentes de desbalance y
+     * static no absorbe ninguna.
      *
-     * Medido en esta maquina (--n 10000 --cannons 10 --threads 16, 10
-     * repeticiones por variante):
+     *   1) Geometrica. El rechazo temprano contra la esfera envolvente deja
+     *      filas enteras casi gratis (las de arriba/abajo de la silueta) y
+     *      concentra el trabajo real en la banda central.
+     *   2) Del hardware. Esta CPU es hibrida: 8 P-cores + 16 E-cores. Un
+     *      E-core tarda casi el doble en el MISMO bloque de filas, asi que
+     *      los P-cores terminan temprano y esperan en la barrera.
      *
-     *     static      media=1450.0 ms  sd=120.6  <- el peor, confirma el
-     *                                                desbalance geometrico
-     *     dynamic,1   media=1334.1 ms  sd= 52.0
-     *     dynamic,4   media=1303.2 ms  sd= 36.0
-     *     guided      media=1301.3 ms  sd= 28.8  <- elegido: mas rapido Y
-     *                                                mas estable
+     * Medido con schedule(runtime) + OMP_SCHEDULE, 24 hilos, 4 repeticiones
+     * (mediana en ms):
      *
-     * guided y dynamic,4 quedan practicamente empatados en media (0.15% de
-     * diferencia); guided gana por tener la menor desviacion estandar de
-     * las cuatro. Sin -fopenmp este pragma es inerte: screensaver_seq no
-     * cambia. */
-    #pragma omp parallel for schedule(guided)
+     *                    N=900     N=10000
+     *     static          36.12     363.15   <- el peor reparto real
+     *     static,1        30.16     314.31   <- round-robin: absorbe (1) pero
+     *                                           no (2), no sabe que un core
+     *                                           es mas lento
+     *     static,8        31.75     326.19
+     *     dynamic,1       27.88     285.48   <- elegido
+     *     dynamic,4       29.54     284.87
+     *     dynamic,16      33.23     328.32   <- bloque muy grande, vuelve a
+     *                                           parecerse a static
+     *     guided          29.56     295.52
+     *     auto            38.01     374.48   <- gcc lo mapea a static
+     *
+     * Solo dynamic absorbe (2), porque el hilo que termina primero vuelve por
+     * mas trabajo sin que nadie tenga que saber de antemano que core es.
+     *
+     * OJO: una medicion anterior (--threads 16 --cannons 10, otro build) daba
+     * guided como ganador y por eso este pragma decia guided. A 24 hilos NO se
+     * reproduce. dynamic,1 y dynamic,4 empatan a N grande; dynamic,1 gana a N
+     * chico y tiene menos varianza, asi que sirve para las dos escalas.
+     *
+     * Sin -fopenmp este pragma es inerte: screensaver_seq no cambia. */
+    #pragma omp parallel for schedule(dynamic, 1)
     for (int j = 0; j < h; ++j) {
         for (int i = 0; i < w; ++i) {
             Vec3 d = camera_ray(&cam, i, j, w, h);

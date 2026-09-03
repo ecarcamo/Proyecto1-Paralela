@@ -71,10 +71,11 @@ void physics_step(SeedSet *s, const PhysicsParams *p, double dt)
     /* --- 1) posicion nueva con la aceleracion vieja, y 2) renormalizar ---
      *
      * Cada 'i' lee y escribe SOLO su propio indice: no hay dependencia entre
-     * iteraciones y el reparto es exacto (todas las 'i' cuestan lo mismo), asi
-     * que schedule(static) sin resto. El 'if' evita pagar el fork/join cuando
-     * N es tan chico que armar el equipo cuesta mas que el bucle. */
-    #pragma omp parallel for schedule(static) if(n >= PHYS_PAR_MIN)
+     * iteraciones. Mismo schedule que el O(N^2) de abajo y por la misma razon
+     * (ver ahi): la carga es uniforme pero los cores no. El 'if' evita pagar
+     * el fork/join cuando N es tan chico que armar el equipo cuesta mas que
+     * el bucle entero. */
+    #pragma omp parallel for schedule(dynamic, 1) if(n >= PHYS_PAR_MIN)
     for (int i = 0; i < n; ++i) {
         Vec3 pos = seed_pos(s, i);
         Vec3 vel = v3(s->vx[i], s->vy[i], s->vz[i]);
@@ -107,12 +108,28 @@ void physics_step(SeedSet *s, const PhysicsParams *p, double dt)
      * hace falta reduccion ni atomicos: el acumulador 'F' es local a la
      * iteracion, no compartido.
      *
-     * schedule(static) y no guided: aca todas las 'i' hacen exactamente N
-     * iteraciones del bucle interno, o sea la carga es perfectamente uniforme
-     * y el reparto estatico es optimo. Es el contraste con el kernel de
-     * render, donde la silueta de la esfera desbalancea las filas y por eso
-     * ahi va guided (ver el comentario de render_balls_raycast). */
-    #pragma omp parallel for schedule(static) if(n >= PHYS_PAR_MIN)
+     * schedule(dynamic, 1) y no static, aunque la carga sea uniforme.
+     *
+     * Este bucle es el caso de libro para static: cada 'i' hace EXACTAMENTE N
+     * iteraciones internas, no hay ni una rama que dependa de los datos. Por
+     * eso llevaba static. Medirlo mostro que static pierde por 15%:
+     *
+     *   N=16000 --raster 1 --physics 1, 24 hilos, 4 reps (solo la fisica):
+     *     static      58.90 ms      dynamic,1   50.32 ms  <- elegido
+     *     static,1    59.55 ms      dynamic,4   51.82 ms
+     *     static,8    59.91 ms      dynamic,16  51.37 ms
+     *     auto        60.88 ms      guided      55.20 ms
+     *
+     * La razon no esta en el bucle, esta en la CPU: 8 P-cores + 16 E-cores.
+     * TRABAJO uniforme no es TIEMPO uniforme cuando la mitad de los cores es
+     * mas lenta. Con static el E-core recibe el mismo bloque que el P-core y
+     * tarda casi el doble; los P-cores terminan y se quedan en la barrera.
+     * dynamic lo absorbe solo: el que termina vuelve por mas.
+     *
+     * Corolario para el informe: en una CPU hibrida, "la carga es uniforme"
+     * ya no alcanza para justificar static. Habria que volver a medirlo en
+     * una maquina homogenea, donde static deberia recuperar la ventaja. */
+    #pragma omp parallel for schedule(dynamic, 1) if(n >= PHYS_PAR_MIN)
     for (int i = 0; i < n; ++i) {
         Vec3 pi = seed_pos(s, i);
         Vec3 F  = v3_zero();
